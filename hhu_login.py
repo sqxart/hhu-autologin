@@ -84,6 +84,13 @@ INDEX_URL_RE = re.compile(r"https?://[^\s'<>]*index\.jsp\?[^\s'<>]+")
 SERVICE_RE = re.compile(r"selectService\('([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d+)'\)")
 NAT_RE = re.compile(r'name="net_access_type"[^>]*value="([^"]*)"')
 
+# 计划任务重定向输出时避免中文乱码
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 # ---------------------------------------------------------------- 输出
 
@@ -272,10 +279,13 @@ def do_login() -> int:
         m = NAT_RE.search(html)
         if m:
             service = m.group(1)
+            say(f"[!] 关键词「{CONFIG['service']}」未匹配到服务，已改用页面默认值: {service}")
         elif services:
             service = services[0][0]
+            say(f"[!] 关键词「{CONFIG['service']}」未匹配到服务，已改用第一个选项: {service}")
         else:
             service = "校园外网服务(out-campus NET)"
+            say(f"[!] 页面未解析到服务列表，使用内置默认: {service}")
     if services:
         say(f"[*] 服务列表: " + " / ".join(d for _v, d, _i in services))
     say(f"[*] 使用服务: {service}")

@@ -24,6 +24,8 @@
 3. 双击 `hhu_login.exe --check` 看自检结果
 4. 双击 `install.bat`，完成。以后开机自动守护，不用管
 
+> **SmartScreen / 杀毒软件提示**：未签名的 exe 首次运行会被 Windows SmartScreen 拦截，点「更多信息 → 仍要运行」即可；个别杀软对 PyInstaller 打包的程序有误报，可添加信任或改用方式二（源码运行）。
+
 ### 方式二：Python 运行（自备 Python 3.8+）
 
 ```bat
@@ -33,6 +35,16 @@ copy config.example.ini config.ini
 notepad config.ini          # 填学号、密码
 python hhu_login.py --check # 自检
 install.bat                 # 注册每分钟计划任务（无窗口运行需 pythonw 或 exe）
+```
+
+### 方式三：macOS / Linux（进阶）
+
+核心逻辑跨平台，无需 install.bat，用 cron 替代计划任务：
+
+```bash
+python3 hhu_login.py --check          # 先自检
+crontab -e                            # 加入一行（每分钟检测）：
+* * * * * /usr/bin/python3 /path/to/hhu_login.py --quiet
 ```
 
 ## 命令一览
