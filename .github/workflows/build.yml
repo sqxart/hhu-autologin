@@ -1,0 +1,33 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --clean --name hhu_login hhu_login.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hhu_login-windows
+          path: dist/hhu_login.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-ghrelease@v2
+        with:
+          files: dist/hhu_login.exe
