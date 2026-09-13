@@ -1,0 +1,35 @@
+name: 问题反馈
+description: 登录失败、行为异常或功能建议
+labels: [bug]
+body:
+  - type: dropdown
+    id: campus
+    attributes:
+      label: 校区
+      options: [常州, 江宁, 西康路, 其他]
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 运行方式
+      options: [Releases 下载的 exe, 源码 python 运行, --loop 循环模式, 不确定]
+    validations:
+      required: true
+  - type: textarea
+    id: check_output
+    attributes:
+      label: 自检输出
+      description: 在项目目录运行 `hhu_login.py --check`，把完整输出贴到这里
+    validations:
+      required: true
+  - type: textarea
+    id: debug_log
+    attributes:
+      label: 日志片段（请脱敏）
+      description: `logs/hhu_login_debug.log` 最后 20 行。注意隐去你的密码；账号前几位可保留
+  - type: input
+    id: os
+    attributes:
+      label: 系统版本
+      placeholder: 例如 Windows 11 24H2

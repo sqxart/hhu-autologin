@@ -1,0 +1,71 @@
+# -*- coding: utf-8 -*-
+"""纯函数单元测试：服务解析 / 关键词匹配 / URL 编码 / 登录页链路正则。
+测试数据来自真实抓包的河海登录页（常州校区）。"""
+import importlib.util
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import hhu_login as hl
+
+# 真实抓包片段（常州校区登录页，2026-09）
+BOOTSTRAP_HTML = (
+    "<script>top.self.location.href="
+    "'http://10.96.0.155/eportal/index.jsp?wlanuserip=a33477056511b504e4b94617958e43b9"
+    "&wlanacname=da09139abe7289065f8686f2a826bbc2&t=wireless-v2&url=35e6780db7fde27a9440bcc5335350b9'"
+    "</script>"
+)
+LOGIN_PAGE_HTML = """
+<div id="bch_service_0" onclick="selectService('校园外网服务(out-campus NET)','校园网(Campus NET)','0')">
+  <div class="right" id="_service_0">校园网(Campus NET) </div></div>
+<div id="bch_service_1" onclick="selectService('中国移动(CMCC NET)','中国移动(CMCC NET)','1')">
+  <div class="right" id="_service_1">中国移动(CMCC NET) </div></div>
+<div id="bch_service_2" onclick="selectService('中国电信(常州)','中国电信(CTCC NET)','2')">
+  <div class="right" id="_service_2">中国电信(CTCC NET) </div></div>
+<div id="bch_service_3" onclick="selectService('中国联通(常州)','中国联通(CUCC NET)','3')">
+  <div class="right" id="_service_3">中国联通(CUCC NET) </div></div>
+<input name="net_access_type" id="net_access_type" value="校园外网服务(out-campus NET)" type="hidden">
+"""
+
+
+def test_index_url_regex_extracts_portal_url():
+    m = hl.INDEX_URL_RE.search(BOOTSTRAP_HTML)
+    assert m, "应从引导页提取出带参数的 index.jsp 地址"
+    assert "index.jsp?" in m.group(0)
+    assert "wlanuserip=a33477056511b504e4b94617958e43b9" in m.group(0)
+
+
+def test_parse_services_real_page():
+    services = hl.parse_services(LOGIN_PAGE_HTML)
+    assert len(services) == 4
+    values = [v for v, _d, _i in services]
+    # 关键陷阱：显示名与提交值不同
+    assert "校园外网服务(out-campus NET)" in values
+    assert "中国电信(常州)" in values
+    assert "中国联通(常州)" in values
+    displays = [d for _v, d, _i in services]
+    assert "中国电信(CTCC NET)" in displays  # 显示名里反而是 CTCC
+
+
+def test_pick_service_by_keyword():
+    services = hl.parse_services(LOGIN_PAGE_HTML)
+    assert hl.pick_service(services, "校园网") == "校园外网服务(out-campus NET)"
+    assert hl.pick_service(services, "移动") == "中国移动(CMCC NET)"
+    assert hl.pick_service(services, "电信") == "中国电信(常州)"  # 按提交值匹配
+    assert hl.pick_service(services, "联通") == "中国联通(常州)"
+    assert hl.pick_service(services, "不存在的服务") is None
+
+
+def test_ece_double_encode_matches_page_js():
+    # encodeURIComponent 的安全字符集：A-Za-z0-9 -_.!~*'()
+    assert hl.ece("2535010118") == "2535010118"          # 纯数字不变
+    assert hl.ece("!Wc220913") == "!Wc220913"            # ! 属安全字符
+    assert hl.ece("校园网") == urllib_quote_twice("校园网")
+    assert hl.ece("a b") == "a%2520b"                    # 空格两次编码
+    assert hl.ece("a&b=c") == "a%2526b%253Dc"            # & 和 = 被编码
+
+
+def urllib_quote_twice(s: str) -> str:
+    import urllib.parse
+    safe = "-_.!~*'()"
+    return urllib.parse.quote(urllib.parse.quote(s, safe=safe), safe=safe)
