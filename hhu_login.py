@@ -376,8 +376,10 @@ def do_logout() -> int:
 
 def run_once() -> int:
     if not ssid_gate():
+        dlog("skip: SSID 不在允许列表")
         return 0
     if online():
+        dlog("online, skip")  # 心跳：日志里最近一行的时间即最近一次守护
         say("[*] 在线，无需登录")
         return 0
     if AUTH_FLAG.exists():
