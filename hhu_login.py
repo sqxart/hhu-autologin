@@ -323,15 +323,40 @@ def do_login() -> int:
 
 
 def do_logout() -> int:
-    say("[*] 使用账号密码注销当前会话 ...")
-    body = "userId=" + ece(CONFIG["username"]) + "&pass=" + ece(CONFIG["password"])
-    s, _, b = http(INTERFACE + "logoutByUserIdAndPass", timeout=10, data=body)
+    if not online():
+        say("[*] 当前本就不在线，无需注销")
+        return 0
+    say("[*] 正在从门户获取当前会话凭证 ...")
+    url = EPORTAL_HOST + "/"
+    user_index = ""
+    for _ in range(4):
+        s, h, b = http(url, timeout=8)
+        if s is None:
+            break
+        loc = h.get("Location", "") or ""
+        m = re.search(r"userIndex=([0-9a-fA-F]+)", loc)
+        if m:
+            user_index = m.group(1)
+            break
+        if s in (301, 302, 303, 307, 308) and loc:
+            url = urllib.parse.urljoin(url, loc)
+            continue
+        m = re.search(r"userIndex=([0-9a-fA-F]+)", b.decode("gbk", errors="replace"))
+        if m:
+            user_index = m.group(1)
+        break
+    if not user_index:
+        say("[x] 未获取到会话凭证（userIndex），无法注销")
+        dlog("logout FAIL: no userIndex")
+        return 1
+    dlog(f"logout: userIndex len={len(user_index)}")
+    s, _, b = http(INTERFACE + "logout", timeout=10, data="userIndex=" + user_index)
     resp = b.decode("utf-8", errors="replace")
-    dlog(f"logout http {s} resp: {resp[:300]}")
-    say(f"[*] 服务器响应: {resp[:200]}")
+    dlog(f"logout http {s} resp: {resp[:200]}")
+    say(f"[*] 服务器响应: {resp[:150]}")
     time.sleep(2)
     if online():
-        say("[!] 仍在线——可能注销未生效或有多条会话")
+        say("[!] 仍在线——注销可能未生效")
         return 2
     say("[√] 已注销下线")
     return 0
