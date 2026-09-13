@@ -1,5 +1,10 @@
 # hhu-autologin
 
+![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Release](https://img.shields.io/github/v/release/sqxart/hhu-autologin)
+
 河海大学（Hohai University）校园网自动登录守护。掉线自动重登、全程无浏览器、纯 Python 标准库零依赖。
 
 > 适用对象：使用学校 ePortal 网页认证的河海同学（江宁 / 常州 / 西康路三校区无线网均适用）。
@@ -115,10 +120,16 @@ service = 校园网    ; 或 移动 / 电信 / 联通
 
 ## 同类项目（河海生态，互相致敬）
 
-- [ThreeStones1029/AutoLoginCampusNetwork](https://github.com/ThreeStones1029/AutoLoginCampusNetwork) — Selenium 方案
-- [Xu-zn/campus-auto-login](https://github.com/Xu-zn/campus-auto-login) — Rust + Slint GUI 方案
-- [CodeFromInterest/auto-hhu-for-openWRT](https://github.com/CodeFromInterest/auto-hhu-for-openWRT) — OpenWrt 路由器方案
-- [RedDragon0293/EportalNT](https://github.com/RedDragon0293/EportalNT) — 安卓端 EPortal 客户端
+河海已有不少同学造过这个轮子，各有所长，按需取用：
+
+- [ThreeStones1029/AutoLoginCampusNetwork](https://github.com/ThreeStones1029/AutoLoginCampusNetwork) — Selenium 浏览器方案，Windows/Ubuntu 双平台教程详细
+- [Xu-zn/campus-auto-login](https://github.com/Xu-zn/campus-auto-login) — Rust + Slint GUI，适合喜欢图形界面的同学
+- [CodeFromInterest/auto-hhu-for-openWRT](https://github.com/CodeFromInterest/auto-hhu-for-openWRT) — 纯 Shell + curl 路由器方案，全宿舍共享一条认证
+- [RedDragon0293/EportalNT](https://github.com/RedDragon0293/EportalNT) — 安卓端 EPortal 客户端，逆向了剩余时长/在线设备查询
+- [RedDragon0293/EPortal](https://github.com/RedDragon0293/EPortal) — 同作者的 Java 桌面版，支持多账号
+- [yiyiyixixi/hhu_campus_auth](https://github.com/yiyiyixixi/hhu_campus_auth) — 轻量 Shell 脚本
+
+本项目的差异化：**无浏览器零依赖**（不折腾 chromedriver 版本）、**凭证全自动获取**（无需手动抓包 queryString）、**断路保护**（不撞接口不触发验证码）、故障自诊断（`--check`）。
 
 ## 免责声明
 

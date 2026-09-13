@@ -66,6 +66,8 @@ wifi_ssid = Hohai University
 debug = true
 """
 
+__version__ = "1.0.1"
+
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
     "http://1.2.3.4/",
@@ -431,6 +433,7 @@ def run_check() -> int:
 def main() -> int:
     global QUIET
     parser = argparse.ArgumentParser(description="河海大学校园网自动登录守护")
+    parser.add_argument("--version", action="version", version=f"hhu-autologin v{__version__}")
     parser.add_argument("--loop", nargs="?", const=0, type=int, metavar="分钟",
                         help="内置循环模式（不传分钟则读配置 interval_minutes）")
     parser.add_argument("--check", action="store_true", help="自检诊断")
