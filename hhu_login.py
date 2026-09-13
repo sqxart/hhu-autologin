@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,6 +45,7 @@ CONFIG_FILE = BASE / "config.ini"
 LOG_DIR = BASE / "logs"
 DEBUG_LOG = LOG_DIR / "hhu_login_debug.log"
 AUTH_FLAG = LOG_DIR / "auth_failed.flag"
+NOTIFY_STATE = LOG_DIR / "notify_state.json"
 
 CONFIG_TEMPLATE = """[account]
 ; 学号
@@ -66,7 +68,7 @@ wifi_ssid = Hohai University
 debug = true
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
@@ -142,6 +144,10 @@ def load_config() -> None:
         "interval": config.getint("guard", "interval_minutes", fallback=1),
         "wifi_ssid": config.get("guard", "wifi_ssid", fallback="").strip(),
         "debug": config.getboolean("advanced", "debug", fallback=True),
+        "notify_enabled": config.getboolean("notify", "enabled", fallback=True),
+        "notify_on_success": config.getboolean("notify", "on_success", fallback=True),
+        "notify_on_failure": config.getboolean("notify", "on_failure", fallback=True),
+        "notify_cooldown": config.getint("notify", "failure_cooldown_minutes", fallback=30),
     }
     if not CONFIG["username"] or not CONFIG["password"]:
         say("[!] config.ini 里账号或密码为空，请填写后重新运行")
@@ -183,6 +189,75 @@ def ece(s) -> str:
     """等价于页面 JS 的 encodeURIComponent 执行两次（doauthen 对所有参数如此）。"""
     safe = "-_.!~*'()"
     return urllib.parse.quote(urllib.parse.quote(str(s), safe=safe), safe=safe)
+
+
+# ---------------------------------------------------------------- 系统通知
+
+_POWERSHELL_TOAST = r"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$t.GetElementsByTagName('text').Item(0).AppendChild($t.CreateTextNode($env:TOAST_TITLE)) | Out-Null
+$t.GetElementsByTagName('text').Item(1).AppendChild($t.CreateTextNode($env:TOAST_MSG)) | Out-Null
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))
+"""
+
+
+def notify_toast(title: str, message: str) -> None:
+    """Win10 1607+ / Win11 原生 Toast。任何失败都静默——通知只是锦上添花。"""
+    if sys.platform != "win32":
+        return
+    try:
+        env = {**os.environ, "TOAST_TITLE": title[:64], "TOAST_MSG": message[:180]}
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_TOAST],
+            capture_output=True, timeout=15, env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as e:
+        dlog(f"toast fail (ignored): {e!r}")
+
+
+def failure_notify_allowed() -> bool:
+    """失败通知冷却：cooldown 分钟内只弹一次（脚本每分钟重跑，状态必须落盘）。"""
+    try:
+        LOG_DIR.mkdir(exist_ok=True)
+        state = {}
+        if NOTIFY_STATE.exists():
+            state = json.loads(NOTIFY_STATE.read_text(encoding="utf-8"))
+        last = float(state.get("last_fail_notify", 0))
+        now = time.time()
+        if now - last < CONFIG["notify_cooldown"] * 60:
+            return False
+        state["last_fail_notify"] = now
+        NOTIFY_STATE.write_text(json.dumps(state), encoding="utf-8")
+        return True
+    except Exception:
+        return True  # 状态文件坏了也别把通知功能整个废掉
+
+
+def clear_failure_cooldown() -> None:
+    try:
+        if NOTIFY_STATE.exists():
+            state = json.loads(NOTIFY_STATE.read_text(encoding="utf-8"))
+            state.pop("last_fail_notify", None)
+            NOTIFY_STATE.write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def notify_failure(message: str) -> None:
+    if not (CONFIG["notify_enabled"] and CONFIG["notify_on_failure"]):
+        return
+    if failure_notify_allowed():
+        notify_toast("校园网自动登录失败", message)
+
+
+def notify_success() -> None:
+    if CONFIG["notify_enabled"] and CONFIG["notify_on_success"]:
+        notify_toast("校园网已自动登录", "检测到掉线并已自动恢复，网络正常")
+    clear_failure_cooldown()  # 成功后清除失败冷却，下次失败可立即提醒
 
 
 # ---------------------------------------------------------------- SSID 门卫
@@ -315,9 +390,11 @@ def do_login() -> int:
         if online():
             say("[√] 登录成功，网络已恢复")
             dlog("SUCCESS: verified online")
+            notify_success()
             return 0
         say("[x] 服务器返回成功但网络仍未恢复")
         dlog("FAIL: server success but still offline")
+        notify_failure("登录接口返回成功但网络未恢复，将继续每分钟重试")
         return 2
     if s == 200 and result == "fail":
         vcode = str(j.get("validCodeUrl") or "")
@@ -325,14 +402,20 @@ def do_login() -> int:
             say("[x] 认证被拒：密码连续错误已触发验证码。")
             say("    请确认 config.ini 密码正确；若已在浏览器里连错三次，")
             say("    先用浏览器登录一次（输入验证码），再运行 --clear-flag")
+            msg = "密码连续错误已触发验证码，已停止重试。请修正 config.ini 密码，先用浏览器登录一次，再运行 --clear-flag"
         else:
             say(f"[x] 认证被拒：{message or resp[:200]}")
+            msg = f"账号或密码被服务器拒绝（{message or '未知原因'}），已停止重试。修正 config.ini 后运行 --clear-flag"
         dlog(f"FAIL: auth rejected: {resp[:300]}")
         LOG_DIR.mkdir(exist_ok=True)
         AUTH_FLAG.write_text(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {resp[:500]}", encoding="utf-8")
+        # 断路器一次性通知：之后每分钟都会在标志处直接退出，不会重复弹
+        if CONFIG["notify_enabled"]:
+            notify_toast("校园网自动登录失败", msg)
         return 4
     say(f"[x] 登录请求异常 HTTP {s}: {resp[:200]}")
     dlog(f"FAIL: login request error {s}")
+    notify_failure(f"登录请求异常（HTTP {s}），将持续每分钟重试")
     return 2
 
 
