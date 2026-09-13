@@ -1,0 +1,10 @@
+# 配置文件里有你的密码，绝对不要提交
+config.ini
+
+# 运行产物
+logs/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
