@@ -183,9 +183,11 @@ def current_wifi_ssid() -> str | None:
     if sys.platform != "win32":
         return None
     try:
+        # CREATE_NO_WINDOW：pythonw 无控制台父进程拉起 netsh 时，防止闪现黑窗口
         raw = subprocess.run(
             ["netsh", "wlan", "show", "interfaces"],
             capture_output=True, timeout=8,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         ).stdout.decode("gbk", errors="replace")
     except Exception:
         return None
