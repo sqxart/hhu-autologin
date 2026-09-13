@@ -29,7 +29,7 @@
 ### 方式二：Python 运行（自备 Python 3.8+）
 
 ```bat
-git clone https://github.com/<你的用户名>/hhu-autologin.git
+git clone https://github.com/sqxart/hhu-autologin.git
 cd hhu-autologin
 copy config.example.ini config.ini
 notepad config.ini          # 填学号、密码
