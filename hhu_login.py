@@ -4,6 +4,7 @@
 
 用法:
     hhu_login.py                # 跑一次：在线则直接退出，掉线则自动登录（供计划任务每分钟调用）
+    hhu_login.py --setup        # 配置向导：自动抓取账号与服务，只需输入密码
     hhu_login.py --loop [分钟]  # 内置循环模式（默认间隔读 config.ini，Ctrl+C 退出）
     hhu_login.py --check        # 自检诊断：配置 / SSID / 在线状态 / 门户链路 / 服务列表 / 断路器
     hhu_login.py --logout       # 注销当前校园网会话
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import getpass
 import json
 import os
 import re
@@ -68,7 +70,7 @@ wifi_ssid = Hohai University
 debug = true
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
@@ -443,13 +445,9 @@ def do_login() -> int:
     return 2
 
 
-def do_logout() -> int:
-    if not online():
-        say("[*] 当前本就不在线，无需注销")
-        return 0
-    say("[*] 正在从门户获取当前会话凭证 ...")
+def fetch_user_index() -> str:
+    """在线时访问门户主页，从重定向链解析当前会话凭证 userIndex（注销/查会话共用）。"""
     url = EPORTAL_HOST + "/"
-    user_index = ""
     for _ in range(4):
         s, h, b = http(url, timeout=8)
         if s is None:
@@ -457,15 +455,36 @@ def do_logout() -> int:
         loc = h.get("Location", "") or ""
         m = re.search(r"userIndex=([0-9a-fA-F]+)", loc)
         if m:
-            user_index = m.group(1)
-            break
+            return m.group(1)
         if s in (301, 302, 303, 307, 308) and loc:
             url = urllib.parse.urljoin(url, loc)
             continue
         m = re.search(r"userIndex=([0-9a-fA-F]+)", b.decode("gbk", errors="replace"))
         if m:
-            user_index = m.group(1)
+            return m.group(1)
         break
+    return ""
+
+
+def get_online_info(user_index: str) -> dict:
+    """查询在线会话信息：userId / realServiceName（当前服务）等。"""
+    if not user_index:
+        return {}
+    s, _, b = http(INTERFACE + "getOnlineUserInfo", timeout=8, data="userIndex=" + user_index)
+    try:
+        j = json.loads(b.decode("utf-8", errors="replace"))
+        return j if isinstance(j, dict) else {}
+    except Exception:
+        dlog(f"getOnlineUserInfo http {s}: bad json")
+        return {}
+
+
+def do_logout() -> int:
+    if not online():
+        say("[*] 当前本就不在线，无需注销")
+        return 0
+    say("[*] 正在从门户获取当前会话凭证 ...")
+    user_index = fetch_user_index()
     if not user_index:
         say("[x] 未获取到会话凭证（userIndex），无法注销")
         dlog("logout FAIL: no userIndex")
@@ -539,6 +558,193 @@ def run_check() -> int:
     return do_login()
 
 
+# ---------------------------------------------------------------- 配置向导
+
+def detect_carrier_keyword(service_name: str) -> str:
+    """从服务名提取跨校区通用的运营商关键词。
+
+    服务提交值带校区后缀（如"中国联通(常州)"），换校区就变了；
+    但运营商归属（移动/电信/联通）不变，config 里存关键词即可自动适配。
+    """
+    name = service_name or ""
+    for kw in ("移动", "电信", "联通"):
+        if kw in name:
+            return kw
+    return "校园网"
+
+
+def save_account(username: str, password: str, service: str) -> None:
+    """把账号写入 config.ini 的 [account] 段，保留其余配置。"""
+    cp = configparser.ConfigParser()
+    if CONFIG_FILE.exists():
+        cp.read(CONFIG_FILE, encoding="utf-8")
+    if not cp.has_section("account"):
+        cp.add_section("account")
+    cp.set("account", "username", username)
+    cp.set("account", "password", password)
+    if service:
+        cp.set("account", "service", service)
+    # 新装用户：补齐守护默认配置（已有文件则不动用户改过的值）
+    for section, key, val in (
+        ("guard", "interval_minutes", "1"),
+        ("guard", "wifi_ssid", "Hohai University"),
+        ("advanced", "debug", "true"),
+    ):
+        if not cp.has_section(section):
+            cp.add_section(section)
+        if not cp.get(section, key, fallback="").strip():
+            cp.set(section, key, val)
+    with CONFIG_FILE.open("w", encoding="utf-8") as f:
+        f.write("; 可手动编辑本文件；换密码后重新运行: hhu_login.py --setup\n")
+        cp.write(f)
+
+
+def ask_password() -> str:
+    """密码输入（不回显），输两遍防手滑；放弃返回空串。
+
+    stdin 不是终端（管道/重定向，如自动化测试）时 getpass 在 Windows 会
+    挂起——此时退回普通 input 明读。
+    """
+    hidden = sys.stdin.isatty()
+    for _ in range(3):
+        try:
+            if hidden:
+                p1 = getpass.getpass("请输入校园网密码（输入不回显）: ").strip()
+            else:
+                p1 = input("请输入校园网密码: ").strip()
+            if not p1:
+                say("[!] 密码不能为空，请重试")
+                continue
+            if hidden:
+                p2 = getpass.getpass("再输一遍确认: ").strip()
+            else:
+                p2 = input("再输一遍确认: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            say("")
+            return ""
+        if p1 == p2:
+            return p1
+        say("[!] 两次输入不一致，请重试")
+    return ""
+
+
+def portal_reachable() -> bool:
+    """认证门户是否可达（区分校园网内外：手机热点/外网下 eportal 不可达）。"""
+    s, _, _ = http(EPORTAL_HOST + "/", timeout=5)
+    return s is not None
+
+
+def run_setup() -> int:
+    """配置向导：在线时自动抓取账号与服务，用户只需输入密码。
+
+    可重复运行：换服务商时用新服务登录一次再跑向导，账号密码不变则自动沿用。
+    """
+    say("== hhu-autologin 配置向导 ==")
+    say("    首次配置：登录校园网后运行，账号和服务自动抓取，只需输入密码")
+    say("    换服务商：用新服务登录一次再运行向导，密码沿用、无需重输")
+
+    # 读取已有配置（换服务商场景：账号密码可沿用）
+    old = {}
+    if CONFIG_FILE.exists():
+        cp = configparser.ConfigParser()
+        cp.read(CONFIG_FILE, encoding="utf-8")
+        if cp.has_section("account"):
+            old = {
+                "username": cp.get("account", "username", fallback="").strip(),
+                "password": cp.get("account", "password", fallback="").strip(),
+                "service": cp.get("account", "service", fallback="").strip(),
+            }
+    if old.get("username"):
+        say(f"[*] 已有配置: 账号 {old['username'][:3]}***{old['username'][-2:]}  服务: {old['service'] or '(未填)'}")
+
+    on_campus = portal_reachable()
+    is_online = online()
+    if not on_campus:
+        say("[!] 当前不在校园网环境（认证门户不可达，如手机热点/外网），")
+        say("    无法自动抓取账号与服务列表，将转为手动填写。")
+        say("    配置写好并回到校园网后自动生效；WiFi 门卫默认只认「Hohai University」，")
+        say("    接网线的同学请把 config.ini 里 wifi_ssid 留空。")
+    elif is_online:
+        say("[*] 校园网内且已在线，正在抓取当前会话的账号与服务 ...")
+    else:
+        say("[*] 在校园网内但未认证。建议先在浏览器完成一次手动登录再运行向导，")
+        say("    即可自动抓取；现在也可以手动填写。")
+
+    username = service_kw = ""
+    if on_campus and is_online:
+        info = get_online_info(fetch_user_index())
+        username = str(info.get("userId", "")).strip()
+        real = str(info.get("realServiceName") or info.get("service") or "").strip()
+        if username:
+            service_kw = detect_carrier_keyword(real)
+            say(f"[√] 抓取到账号: {username}")
+            say(f"[√] 抓取到服务: {real}")
+            say(f"    -> 按关键词「{service_kw}」保存（不带校区字样，换校区通用）")
+            try:
+                if input("回车确认，或输入 n 手动填写: ").strip().lower() == "n":
+                    username = service_kw = ""
+            except (EOFError, KeyboardInterrupt):
+                say("")
+                return 130
+        else:
+            say("[!] 已在线但未抓到会话信息（认证会话可能异常），请手动填写")
+
+    if not username:
+        try:
+            tip = f"（回车沿用 {old['username'][:3]}***{old['username'][-2:]}）" if old.get("username") else ""
+            username = input(f"请输入学号{tip}: ").strip() or old.get("username", "")
+            if not username:
+                say("[x] 学号不能为空，已退出（未写入任何配置）")
+                return 5
+            services = fetch_services() if on_campus else []
+            if services:
+                say("[*] 检测到本校区服务列表，输入序号选择:")
+                for _v, d, i in services:
+                    say(f"    [{i}] {d}")
+                choice = input("服务序号 [回车=0 校园网]: ").strip() or "0"
+                try:
+                    service_kw = detect_carrier_keyword(services[int(choice)][1])
+                except (ValueError, IndexError):
+                    service_kw = "校园网"
+                    say("[!] 序号无效，已使用默认「校园网」（之后可改 config.ini 的 service）")
+            if not service_kw:
+                service_kw = input("服务关键词（校园网/移动/电信/联通，回车=校园网）: ").strip() \
+                    or old.get("service", "") or "校园网"
+        except (EOFError, KeyboardInterrupt):
+            say("")
+            return 130
+
+    # 密码：账号未变且已有保存的密码 -> 可沿用（换服务商场景不用重输）
+    password = ""
+    if old.get("password") and old.get("username") == username:
+        say("[*] 账号未变，检测到已保存的密码")
+        try:
+            renew = input("回车沿用已保存密码，或输入 n 重新输入: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            say("")
+            return 130
+        if renew != "n":
+            password = old["password"]
+            say("[√] 密码沿用现有配置，未重新输入")
+    if not password:
+        password = ask_password()
+        if not password:
+            say("[x] 未获得有效密码，已退出（未写入任何配置）")
+            return 5
+
+    save_account(username, password, service_kw)
+    if AUTH_FLAG.exists():  # 配置已更新，旧的认证拒绝原因不再适用
+        AUTH_FLAG.unlink(missing_ok=True)
+        say("[√] 已清除断路器标志（旧配置的认证拒绝不再适用）")
+    say("")
+    say(f"[√] 配置已写入 {CONFIG_FILE}")
+    say(f"    账号: {username}   服务: {service_kw}   密码: 已保存（不回显）")
+    say("[*] 守护会每分钟自动检测，掉线即用以上配置重登")
+    say("    可运行 --check 自检；以后换密码或换服务商，重新运行 --setup 即可")
+    dlog(f"setup: saved account {username[:3]}*** service={service_kw}")
+    return 0
+
+
 # ---------------------------------------------------------------- 入口
 
 def main() -> int:
@@ -548,11 +754,15 @@ def main() -> int:
     parser.add_argument("--loop", nargs="?", const=0, type=int, metavar="分钟",
                         help="内置循环模式（不传分钟则读配置 interval_minutes）")
     parser.add_argument("--check", action="store_true", help="自检诊断")
+    parser.add_argument("--setup", action="store_true",
+                        help="配置向导：自动抓取账号与服务，只需输入密码（重复运行可换服务商，密码沿用）")
     parser.add_argument("--logout", action="store_true", help="注销当前校园网会话")
     parser.add_argument("--clear-flag", action="store_true", help="清除断路器标志")
     parser.add_argument("--quiet", action="store_true", help="静默模式（计划任务可加）")
     args = parser.parse_args()
 
+    if args.setup:  # 向导无需既有配置，放在 load_config 之前（首次运行 config.ini 还不存在）
+        return run_setup()
     load_config()
     QUIET = args.quiet
 

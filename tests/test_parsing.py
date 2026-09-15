@@ -90,3 +90,32 @@ def test_fetch_services_parses_service_content_field():
     assert hl.pick_service(services, "移动") == "中国移动(CMCC NET)"
     assert hl.pick_service(services, "电信") == "中国电信(常州)"
     assert hl.pick_service(services, "校园网") == "校园外网服务(out-campus NET)"
+
+
+def test_detect_carrier_keyword():
+    """从服务名提取跨校区通用的关键词（校区后缀会变，运营商不变）。"""
+    assert hl.detect_carrier_keyword("中国移动(CMCC NET)") == "移动"
+    assert hl.detect_carrier_keyword("中国电信(常州)") == "电信"
+    assert hl.detect_carrier_keyword("中国联通(常州)") == "联通"
+    assert hl.detect_carrier_keyword("校园外网服务(out-campus NET)") == "校园网"
+    assert hl.detect_carrier_keyword("") == "校园网"
+
+
+def test_save_account_preserves_other_sections(tmp_path, monkeypatch):
+    """--setup 写配置时应保留 [guard] 等用户已改过的段落。"""
+    import configparser
+    cfg = tmp_path / "config.ini"
+    cfg.write_text(
+        "[account]\nusername = old\npassword = old\nservice = 校园网\n"
+        "\n[guard]\nwifi_ssid = MyWiFi\ninterval_minutes = 5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hl, "CONFIG_FILE", cfg)
+    hl.save_account("2624030207", "pw", "移动")
+    cp = configparser.ConfigParser()
+    cp.read(cfg, encoding="utf-8")
+    assert cp.get("account", "username") == "2624030207"
+    assert cp.get("account", "password") == "pw"
+    assert cp.get("account", "service") == "移动"
+    assert cp.get("guard", "wifi_ssid") == "MyWiFi"      # 用户已改的值不被覆盖
+    assert cp.get("guard", "interval_minutes") == "5"
