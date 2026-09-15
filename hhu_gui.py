@@ -28,6 +28,172 @@ TASK_NAME = "HHU-AutoLogin"
 REPO_URL = "https://github.com/sqxart/hhu-autologin"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# ---------------------------------------------------------------- 系统托盘（纯 ctypes，零依赖）
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
+    NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
+    NIIF_INFO = 0x1
+    WM_APP_TRAY = 0x8001                       # 托盘回调消息（WM_APP+1）
+    WM_LBUTTONUP, WM_RBUTTONUP = 0x0202, 0x0205
+    GWLP_WNDPROC = -4
+    TPM_RIGHTBUTTON, TPM_RETURNCMD, TPM_NONOTIFY = 0x2, 0x100, 0x80
+    MF_STRING = 0x0
+
+    class NOTIFYICONDATAW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_uint), ("hWnd", wintypes.HWND), ("uID", ctypes.c_uint),
+            ("uFlags", ctypes.c_uint), ("uCallbackMessage", ctypes.c_uint),
+            ("hIcon", wintypes.HICON), ("szTip", ctypes.c_wchar * 128),
+            ("dwState", ctypes.c_uint), ("dwStateMask", ctypes.c_uint),
+            ("szInfo", ctypes.c_wchar * 256), ("uVersion", ctypes.c_uint),
+            ("szInfoTitle", ctypes.c_wchar * 64), ("dwInfoFlags", ctypes.c_uint),
+            ("guidItem", ctypes.c_ubyte * 16),
+        ]
+
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                 wintypes.WPARAM, wintypes.LPARAM)
+    _user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    _user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    _user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    _user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    _user32.CallWindowProcW.restype = ctypes.c_ssize_t
+    _user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                        wintypes.WPARAM, wintypes.LPARAM]
+    _shell32.Shell_NotifyIconW.argtypes = [ctypes.c_uint, ctypes.POINTER(NOTIFYICONDATAW)]
+    _user32.DefWindowProcW.restype = ctypes.c_ssize_t
+    _user32.DefWindowProcW.argtypes = [wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.CreateWindowExW.restype = wintypes.HWND
+    _user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                        wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                                        wintypes.HINSTANCE, wintypes.LPVOID]
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", ctypes.c_uint), ("lpfnWndProc", WNDPROC),
+                    ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                    ("hCursor", ctypes.c_void_p), ("hbrBackground", wintypes.HBRUSH),
+                    ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+
+
+
+def _make_tray_icon(rgb=(30, 200, 100)):
+    """手绘 16x16 绿色圆点图标（AND mask 圆外透明），不依赖任何资源文件。"""
+    size = 16
+    cx = cy = (size - 1) / 2
+    r = size / 2 - 1.3
+    and_mask = bytearray()
+    xor_data = bytearray()
+    for y in range(size):
+        row = 0
+        for x in range(size):
+            inside = (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+            if not inside:
+                row |= 1 << (15 - x)            # 圆外透明（每行 16 位恰好 2 字节，天然对齐）
+            xor_data += bytes((rgb[2], rgb[1], rgb[0])) if inside else b"\x00\x00\x00"
+        and_mask += row.to_bytes(2, "little")
+    return _user32.CreateIcon(None, size, size, 1, 24, bytes(and_mask), bytes(xor_data)) or None
+
+
+class TrayIcon:
+    """零依赖系统托盘：独立隐藏窗口 + 专属消息泵线程，事件经队列送回主线程。
+
+    不挂钩 Tk 的窗口过程，避免与 Tk 事件循环互相干扰。
+    """
+
+    def __init__(self, tooltip):
+        import queue
+        self._events = queue.Queue()
+        self._tooltip = tooltip
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=5)
+        if not self._added:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def _pump(self):
+        """托盘专用线程：建隐藏窗口、挂图标、泵消息；菜单也在这条线程弹出。"""
+        cls_name = "HHUAutoLoginTray"
+        wndproc = WNDPROC(self._wndproc)
+        self._cb_ref = wndproc                  # 回调保活
+        wc = WNDCLASSW()
+        wc.lpfnWndProc = wndproc
+        wc.lpszClassName = cls_name
+        wc.hInstance = _kernel32.GetModuleHandleW(None)
+        _user32.RegisterClassW(ctypes.byref(wc))
+        self.hwnd = _user32.CreateWindowExW(0, cls_name, "hhu_tray", 0,
+                                            0, 0, 0, 0, None, None, wc.hInstance, None)
+        self._hicon = _make_tray_icon()
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(nid)
+        nid.hWnd, nid.uID = self.hwnd, 1
+        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
+        nid.uCallbackMessage = WM_APP_TRAY
+        nid.hIcon = self._hicon
+        nid.szTip = self._tooltip
+        self._added = bool(_shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)))
+        self._ready.set()
+        if not self._added:
+            return
+        msg = wintypes.MSG()
+        while _user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            _user32.TranslateMessage(ctypes.byref(msg))
+            _user32.DispatchMessageW(ctypes.byref(msg))
+
+    def _wndproc(self, hwnd, msg, wp, lp):
+        if msg == WM_APP_TRAY:
+            if lp == WM_LBUTTONUP:
+                self._events.put("left")
+            elif lp == WM_RBUTTONUP:
+                self._events.put(("menu", self._popup()))
+            return 0
+        return _user32.DefWindowProcW(hwnd, msg, wp, lp)
+
+    def _popup(self):
+        """在托盘线程弹出菜单，返回选中项 id（0=未选）。"""
+        hmenu = _user32.CreatePopupMenu()
+        for iid, text in self.menu_items:
+            _user32.AppendMenuW(hmenu, MF_STRING, iid, text)
+        pt = wintypes.POINT()
+        _user32.GetCursorPos(ctypes.byref(pt))
+        _user32.SetForegroundWindow(self.hwnd)  # 否则菜单点击外部不消失
+        cmd = _user32.TrackPopupMenu(hmenu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                     pt.x, pt.y, 0, self.hwnd, None)
+        _user32.PostMessageW(self.hwnd, 0, 0, 0)
+        _user32.DestroyMenu(hmenu)
+        return int(cmd)
+
+    def bubble(self, title, msg):
+        """气泡通知（Shell_NotifyIcon 可跨线程调用）。"""
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(nid)
+        nid.hWnd, nid.uID = self.hwnd, 1
+        nid.uFlags = NIF_INFO
+        nid.szInfo, nid.szInfoTitle, nid.dwInfoFlags = msg, title, NIIF_INFO
+        _shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+
+    def poll_event(self):
+        """主线程非阻塞取一个托盘事件；无事件返回 None。"""
+        try:
+            return self._events.get_nowait()
+        except Exception:
+            return None
+
+    def close(self):
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(nid)
+        nid.hWnd, nid.uID = self.hwnd, 1
+        _shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+        _user32.PostThreadMessageW(self._thread.ident, 0x0012, 0, 0)  # WM_QUIT
+
 SERVICE_CHOICES = ["校园网", "移动", "电信", "联通"]
 # 校区 -> WiFi 门卫 SSID。服务提交值由服务器按校区自动下发，无需选校区；
 # 这里只影响"不在校园 WiFi 时跳过守护"的检查。江宁/西康路确切 SSID 待同学反馈，
@@ -114,6 +280,8 @@ def read_config() -> dict:
         "service": cp.get("account", "service", fallback="校园网"),
         "interval": cp.getint("guard", "interval_minutes", fallback=1),
         "wifi_ssid": cp.get("guard", "wifi_ssid", fallback=""),
+        "auto_exit_after_login": cp.getboolean("guard", "auto_exit_after_login", fallback=False),
+        "auto_exit_minutes": cp.getint("guard", "auto_exit_minutes", fallback=0),
     }
 
 
@@ -131,7 +299,8 @@ def sync_runtime_config(cfg: dict) -> None:
     })
 
 
-def save_all(username: str, password: str, service: str, interval: int, wifi_ssid: str) -> None:
+def save_all(username: str, password: str, service: str, interval: int, wifi_ssid: str,
+             auto_exit_after_login: bool = False, auto_exit_minutes: int = 0) -> None:
     hl.save_account(username, password, service)
     cp = configparser.ConfigParser()
     if hl.CONFIG_FILE.exists():
@@ -140,6 +309,8 @@ def save_all(username: str, password: str, service: str, interval: int, wifi_ssi
         cp.add_section("guard")
     cp.set("guard", "interval_minutes", str(max(1, int(interval))))
     cp.set("guard", "wifi_ssid", wifi_ssid.strip())
+    cp.set("guard", "auto_exit_after_login", "true" if auto_exit_after_login else "false")
+    cp.set("guard", "auto_exit_minutes", str(max(0, int(auto_exit_minutes))))
     with hl.CONFIG_FILE.open("w", encoding="utf-8") as f:
         cp.write(f)
 
@@ -157,19 +328,123 @@ EXIT_CODE_MSG = {
 # ---------------------------------------------------------------- 界面
 
 class App(tk.Tk):
-    def __init__(self):
+    MENU_OPEN, MENU_CHECK, MENU_EXIT = 1001, 1002, 1003
+
+    def __init__(self, start_hidden: bool = False):
         super().__init__()
         self.title(f"河海校园网自动登录 · 控制台 v{hl.__version__}")
-        self.geometry("580x740")
+        self.geometry("580x820")
         self.resizable(False, False)
         self.th = THEMES["默认"]
         self._last_log_text = ""
+        self._close_tip_shown = False
+        self._exiting = False
         self._build_style()
         self._build()
         self.apply_theme("默认")
         self._refresh_status()
         self._refresh_autostart()
         self._tick_log()
+        self.update()  # 强制完成顶层窗口映射，托盘挂钩需要真实的 HWND
+        self._init_tray()
+        self.after(120, self._drain_tray)
+        self._start_daemon()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        if start_hidden:
+            self.after(50, self.withdraw)
+
+    # ---------- 系统托盘与常驻守护
+
+    def _init_tray(self):
+        try:
+            self.tray = TrayIcon(f"河海校园网自动登录 v{hl.__version__}")
+            self.tray.menu_items = [
+                (self.MENU_OPEN, "打开控制窗口"),
+                (self.MENU_CHECK, "立即检测登录状态"),
+                (self.MENU_EXIT, "退出控制台（后台守护继续）"),
+            ]
+        except Exception as e:
+            self.tray = None
+            hl.dlog(f"gui: tray init fail: {e!r}")
+
+    def _drain_tray(self):
+        """把托盘线程的事件分发到主线程。"""
+        if self._exiting:
+            return
+        if self.tray:
+            while True:
+                evt = self.tray.poll_event()
+                if evt is None:
+                    break
+                if evt == "left":
+                    self.show_window()
+                elif isinstance(evt, tuple) and evt[0] == "menu":
+                    self._on_tray_menu(evt[1])
+        self.after(120, self._drain_tray)
+
+    def show_window(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _on_tray_menu(self, cmd):
+        if cmd == self.MENU_OPEN:
+            self.show_window()
+        elif cmd == self.MENU_CHECK:
+            self.on_check()
+        elif cmd == self.MENU_EXIT:
+            if messagebox.askyesno(
+                    "退出控制台",
+                    "退出后本窗口的实时检测停止；计划任务的后台守护不受影响。\n"
+                    "（想彻底停止守护：取消「开机自启」勾选并保存）\n\n确定退出吗？"):
+                self._real_exit()
+
+    def on_close(self):
+        """点窗口 × = 缩到托盘继续守护，而不是退出。"""
+        self.withdraw()
+        if not self._close_tip_shown and self.tray:
+            self._close_tip_shown = True
+            self.tray.bubble("仍在后台运行",
+                             "控制台已缩到系统托盘，右键托盘图标可打开窗口或退出。")
+
+    def _real_exit(self):
+        self._exiting = True
+        try:
+            if self.tray:
+                self.tray.close()
+        except Exception:
+            pass
+        self.destroy()
+
+    def _start_daemon(self):
+        """控制台常驻期间内嵌守护循环（与计划任务共存无害：在线检测幂等）。"""
+        cfg = read_config()
+        self._daemon_interval = max(1, cfg["interval"])
+        if cfg["auto_exit_minutes"] > 0:
+            self.after(cfg["auto_exit_minutes"] * 60000,
+                       lambda: self._auto_exit(f"控制台已运行 {cfg['auto_exit_minutes']} 分钟"))
+        self.after(5000, self._daemon_tick)
+
+    def _daemon_tick(self):
+        if self._exiting:
+            return
+        self._bg(lambda: hl.run_once(), self._daemon_done, busy=False)
+        self.after(self._daemon_interval * 60000, self._daemon_tick)
+
+    def _daemon_done(self, res):
+        if res == 0 and not self._exiting and read_config()["auto_exit_after_login"]:
+            self._auto_exit("网络在线（登录成功）")
+
+    def _auto_exit(self, reason):
+        if self._exiting:
+            return
+        self._exiting = True
+        if self.tray:
+            try:
+                self.tray.bubble("控制台即将退出", f"{reason}，按设置自动退出。后台守护不受影响。")
+            except Exception:
+                pass
+        self.after(2000, self._real_exit)
 
     # ---------- ttk 主题与配色
 
@@ -220,6 +495,7 @@ class App(tk.Tk):
         self.lbl_link.config(fg=t["link"], bg=t["bg"])
         self._sync_show()
         self._sync_auto()
+        self._sync_exit_online()
         self._refresh_status()  # 动态状态色按新主题立即重刷
 
     # ---------- 布局
@@ -278,6 +554,7 @@ class App(tk.Tk):
         guard = ttk.LabelFrame(self, text="▍守护设置")
         guard.pack(fill="x", padx=10, pady=6)
         self.var_autostart = tk.BooleanVar(value=False)
+        self.var_exit_online = tk.BooleanVar(value=False)
         self.ckb_auto = tk.Label(guard, text="☐ 开机自启（后台守护，掉线自动恢复）", cursor="hand2")
         self.ckb_auto.pack(anchor="w", padx=10, pady=4)
         self.ckb_auto.bind("<Button-1>", lambda _e: self._toggle_auto())
@@ -288,6 +565,19 @@ class App(tk.Tk):
         self.spn_interval = ttk.Spinbox(row2, from_=1, to=60, width=4)
         self.spn_interval.pack(side="left", padx=4)
         ttk.Label(row2, text="分钟（保存配置后生效）", style="TMuted.TLabel").pack(side="left")
+
+        self.chk_exit_online = tk.Label(guard, text="☐ 上线后自动退出控制台（只想开机登录一次的人勾这个）",
+                                        cursor="hand2")
+        self.chk_exit_online.pack(anchor="w", padx=10, pady=2)
+        self.chk_exit_online.bind(
+            "<Button-1>",
+            lambda _e: self._toggle_flag(self.var_exit_online, self._sync_exit_online))
+        row_exit = ttk.Frame(guard)
+        row_exit.pack(anchor="w", padx=10, pady=2)
+        ttk.Label(row_exit, text="或：控制台运行").pack(side="left")
+        self.spn_exit_min = ttk.Spinbox(row_exit, from_=0, to=1440, width=5)
+        self.spn_exit_min.pack(side="left", padx=4)
+        ttk.Label(row_exit, text="分钟后自动退出（0=不启用）", style="TMuted.TLabel").pack(side="left")
 
         ttk.Label(guard, text="WiFi 门卫（不在校园 WiFi 时守护自动跳过）:").pack(anchor="w", padx=10)
         self.cmb_campus = ttk.Combobox(guard, values=list(CAMPUS_CHOICES), width=28, state="readonly")
@@ -332,6 +622,9 @@ class App(tk.Tk):
             self.cmb_service.set(cfg["service"])
         self.spn_interval.delete(0, "end")
         self.spn_interval.insert(0, str(cfg["interval"]))
+        self.var_exit_online.set(cfg["auto_exit_after_login"])
+        self.spn_exit_min.delete(0, "end")
+        self.spn_exit_min.insert(0, str(cfg["auto_exit_minutes"]))
         ssid = cfg["wifi_ssid"]
         for label, value in CAMPUS_CHOICES.items():
             if (ssid and ssid.lower() in value.lower()) or value.lower() == ssid.lower():
@@ -354,6 +647,16 @@ class App(tk.Tk):
         self.ckb_auto.config(text=("☑" if on else "☐") + " 开机自启（后台守护，掉线自动恢复）",
                              fg=self.th["accent"] if on else self.th["fg"],
                              bg=self.th["bg"])
+
+    def _sync_exit_online(self):
+        on = self.var_exit_online.get()
+        self.chk_exit_online.config(
+            text=("☑" if on else "☐") + " 上线后自动退出控制台（只想开机登录一次的人勾这个）",
+            fg=self.th["accent"] if on else self.th["fg"], bg=self.th["bg"])
+
+    def _toggle_flag(self, var, sync_fn):
+        var.set(not var.get())
+        sync_fn()
 
     def _toggle_auto(self):
         self.var_autostart.set(not self.var_autostart.get())
@@ -490,9 +793,15 @@ class App(tk.Tk):
             return
         campus = self.cmb_campus.get()
         ssid = CAMPUS_CHOICES.get(campus, "") if campus else ""
+        try:
+            exit_min = int(self.spn_exit_min.get())
+        except ValueError:
+            exit_min = 0
 
         def work():
-            save_all(username, password, service, interval, ssid)
+            save_all(username, password, service, interval, ssid,
+                     auto_exit_after_login=self.var_exit_online.get(),
+                     auto_exit_minutes=exit_min)
             sync_runtime_config(read_config())
             if self.var_autostart.get():
                 return install_task(interval)
@@ -551,7 +860,11 @@ class App(tk.Tk):
 
 
 def main() -> int:
-    app = App()
+    import argparse
+    parser = argparse.ArgumentParser(description="河海校园网自动登录 · 可视化控制台")
+    parser.add_argument("--tray", action="store_true", help="启动时缩到系统托盘（不显示窗口）")
+    args = parser.parse_args()
+    app = App(start_hidden=args.tray)
     app.mainloop()
     return 0
 
