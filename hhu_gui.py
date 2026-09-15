@@ -23,6 +23,7 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 import hhu_login as hl
+import ak_icon
 
 TASK_NAME = "HHU-AutoLogin"
 REPO_URL = "https://github.com/sqxart/hhu-autologin"
@@ -84,27 +85,28 @@ if sys.platform == "win32":
 
 
 
-def _make_tray_icon(rgb=(30, 200, 100)):
-    """手绘 16x16 绿色圆点图标（AND mask 圆外透明），不依赖任何资源文件。"""
-    size = 16
-    cx = cy = (size - 1) / 2
-    r = size / 2 - 1.3
+def _make_tray_icon(size: int = 16):
+    """方舟风托盘图标：ak_icon 渲染 -> CreateIcon（alpha>127 视为不透明）。"""
+    raw = ak_icon._ak_icon_rgba(size)
     and_mask = bytearray()
     xor_data = bytearray()
     for y in range(size):
         row = 0
         for x in range(size):
-            inside = (x - cx) ** 2 + (y - cy) ** 2 <= r * r
-            if not inside:
-                row |= 1 << (15 - x)            # 圆外透明（每行 16 位恰好 2 字节，天然对齐）
-            xor_data += bytes((rgb[2], rgb[1], rgb[0])) if inside else b"\x00\x00\x00"
+            a = raw[(y * size + x) * 4 + 3]
+            r, g_, b = raw[(y * size + x) * 4], raw[(y * size + x) * 4 + 1], raw[(y * size + x) * 4 + 2]
+            if a > 127:
+                xor_data += bytes((b, g_, r))
+            else:
+                row |= 1 << (15 - x)          # 每行 16 位恰 2 字节，天然对齐
+                xor_data += b"\x00\x00\x00"
         and_mask += row.to_bytes(2, "little")
     return _user32.CreateIcon(None, size, size, 1, 24, bytes(and_mask), bytes(xor_data)) or None
 
 
 class TrayIcon:
-    """零依赖系统托盘：独立隐藏窗口 + 专属消息泵线程，事件经队列送回主线程。
-
+    """零依赖系统托盘：独立隐藏窗口 + 专属消息泵线程，事件经队列送回主线程。 \n" +
+"
     不挂钩 Tk 的窗口过程，避免与 Tk 事件循环互相干扰。
     """
 
@@ -199,10 +201,15 @@ SERVICE_CHOICES = ["校园网", "移动", "电信", "联通"]
 # 这里只影响"不在校园 WiFi 时跳过守护"的检查。江宁/西康路确切 SSID 待同学反馈，
 # 先用宽松值"Hohai"（子串匹配所有 Hohai 开头的 SSID）。
 CAMPUS_CHOICES = {
-    "金坛校区（Hohai University）": "Hohai University",
-    "江宁校区（宽松匹配）": "Hohai",
-    "西康路校区（宽松匹配）": "Hohai",
-    "不检查 WiFi（网线/通用）": "",
+    "1. 严格仅校园网登录（若失败选下一选项）": "Hohai University",
+    "2. 仅校园网登录（若失败选下一选项）": "Hohai",
+    "3. 无论连接的是否为校园网都尝试登录": "",
+}
+# 账号配置区的校区选择：金坛服务提交值已实测，其他校区需现场抓取
+CAMPUS_AREA = {
+    "金坛校区（服务配置已实测）": ("jintan", SERVICE_CHOICES),
+    "江宁校区（服务需现场抓取）": ("jiangning", None),
+    "西康路校区（服务需现场抓取）": ("xikanglu", None),
 }
 
 # 主题遵循 ak-ui 设计契约：中性面层为主，色彩只作信号（黄=行动/警告、
@@ -282,12 +289,13 @@ def read_config() -> dict:
         "wifi_ssid": cp.get("guard", "wifi_ssid", fallback=""),
         "auto_exit_after_login": cp.getboolean("guard", "auto_exit_after_login", fallback=False),
         "auto_exit_minutes": cp.getint("guard", "auto_exit_minutes", fallback=0),
+        "campus_area": cp.get("guard", "campus_area", fallback="jintan"),
     }
 
 
 def sync_runtime_config(cfg: dict) -> None:
-    """把配置同步进 hhu_login 的运行时全局 CONFIG。
-
+    """把配置同步进 hhu_login 的运行时全局 CONFIG。 \n" +
+"
     CLI 靠 load_config() 填充（空账号会 sys.exit，GUI 不能用）；
     run_once/ssid_gate/do_login 都依赖它，不填会 KeyError。
     """
@@ -300,7 +308,8 @@ def sync_runtime_config(cfg: dict) -> None:
 
 
 def save_all(username: str, password: str, service: str, interval: int, wifi_ssid: str,
-             auto_exit_after_login: bool = False, auto_exit_minutes: int = 0) -> None:
+             auto_exit_after_login: bool = False, auto_exit_minutes: int = 0,
+             campus_area: str = "jintan") -> None:
     hl.save_account(username, password, service)
     cp = configparser.ConfigParser()
     if hl.CONFIG_FILE.exists():
@@ -311,6 +320,7 @@ def save_all(username: str, password: str, service: str, interval: int, wifi_ssi
     cp.set("guard", "wifi_ssid", wifi_ssid.strip())
     cp.set("guard", "auto_exit_after_login", "true" if auto_exit_after_login else "false")
     cp.set("guard", "auto_exit_minutes", str(max(0, int(auto_exit_minutes))))
+    cp.set("guard", "campus_area", campus_area)
     with hl.CONFIG_FILE.open("w", encoding="utf-8") as f:
         cp.write(f)
 
@@ -328,7 +338,7 @@ EXIT_CODE_MSG = {
 # ---------------------------------------------------------------- 界面
 
 class App(tk.Tk):
-    MENU_OPEN, MENU_CHECK, MENU_EXIT = 1001, 1002, 1003
+    MENU_OPEN, MENU_CHECK, MENU_DAEMON, MENU_EXIT = 1001, 1002, 1004, 1003
 
     def __init__(self, start_hidden: bool = False):
         super().__init__()
@@ -339,8 +349,14 @@ class App(tk.Tk):
         self._last_log_text = ""
         self._close_tip_shown = False
         self._exiting = False
+        self._daemon_on = True
         self._build_style()
         self._build()
+        try:  # 方舟风窗口/任务栏图标（内存 PNG，无资源文件）
+            self._icon_ref = tk.PhotoImage(data=ak_icon.ak_icon_png(48))
+            self.iconphoto(True, self._icon_ref)
+        except Exception:
+            pass
         self.apply_theme("默认")
         self._refresh_status()
         self._refresh_autostart()
@@ -358,11 +374,7 @@ class App(tk.Tk):
     def _init_tray(self):
         try:
             self.tray = TrayIcon(f"河海校园网自动登录 v{hl.__version__}")
-            self.tray.menu_items = [
-                (self.MENU_OPEN, "打开控制窗口"),
-                (self.MENU_CHECK, "立即检测登录状态"),
-                (self.MENU_EXIT, "退出控制台（后台守护继续）"),
-            ]
+            self._sync_tray_menu()
         except Exception as e:
             self.tray = None
             hl.dlog(f"gui: tray init fail: {e!r}")
@@ -387,16 +399,37 @@ class App(tk.Tk):
         self.lift()
         self.focus_force()
 
+    def _sync_tray_menu(self):
+        """按守护状态刷新托盘菜单（停止/恢复互斥显示）。"""
+        if not self.tray:
+            return
+        daemon_item = ((self.MENU_DAEMON, "停止后台守护（不再自动登录）") if self._daemon_on
+                       else (self.MENU_DAEMON, "恢复后台守护（重新自动登录）"))
+        self.tray.menu_items = [
+            (self.MENU_OPEN, "打开控制窗口"),
+            (self.MENU_CHECK, "立即检测登录状态"),
+            daemon_item,
+            (self.MENU_EXIT, "退出控制台"),
+        ]
+
     def _on_tray_menu(self, cmd):
         if cmd == self.MENU_OPEN:
             self.show_window()
         elif cmd == self.MENU_CHECK:
             self.on_check()
+        elif cmd == self.MENU_DAEMON:
+            if self._daemon_on:
+                if messagebox.askyesno(
+                        "停止后台守护",
+                        "停止后将不再自动检测登录（计划任务一并卸载）， \n" +
+                        "控制台保留，可随时在托盘菜单恢复。确定停止吗？"):
+                    self._stop_daemon("托盘手动停止")
+            else:
+                self._resume_daemon()
         elif cmd == self.MENU_EXIT:
-            if messagebox.askyesno(
-                    "退出控制台",
-                    "退出后本窗口的实时检测停止；计划任务的后台守护不受影响。\n"
-                    "（想彻底停止守护：取消「开机自启」勾选并保存）\n\n确定退出吗？"):
+            state = "后台守护仍在运行" if self._daemon_on else "后台守护已停止"
+            if messagebox.askyesno("退出控制台", f"{state}。 \n" +
+"退出只是关闭这个窗口，确定吗？"):
                 self._real_exit()
 
     def on_close(self):
@@ -422,29 +455,45 @@ class App(tk.Tk):
         self._daemon_interval = max(1, cfg["interval"])
         if cfg["auto_exit_minutes"] > 0:
             self.after(cfg["auto_exit_minutes"] * 60000,
-                       lambda: self._auto_exit(f"控制台已运行 {cfg['auto_exit_minutes']} 分钟"))
+                       lambda: self._stop_daemon(f"守护已运行 {cfg['auto_exit_minutes']} 分钟"))
         self.after(5000, self._daemon_tick)
 
     def _daemon_tick(self):
         if self._exiting:
             return
-        self._bg(lambda: hl.run_once(), self._daemon_done, busy=False)
+        if self._daemon_on:
+            self._bg(lambda: hl.run_once(), self._daemon_done, busy=False)
         self.after(self._daemon_interval * 60000, self._daemon_tick)
 
     def _daemon_done(self, res):
         if res == 0 and not self._exiting and read_config()["auto_exit_after_login"]:
-            self._auto_exit("网络在线（登录成功）")
+            self._stop_daemon("网络在线（登录成功）")
 
-    def _auto_exit(self, reason):
-        if self._exiting:
-            return
-        self._exiting = True
-        if self.tray:
-            try:
-                self.tray.bubble("控制台即将退出", f"{reason}，按设置自动退出。后台守护不受影响。")
-            except Exception:
-                pass
-        self.after(2000, self._real_exit)
+    def _stop_daemon(self, reason):
+        """停止后台守护：卸载计划任务 + 暂停内嵌循环；控制台保留。"""
+        self._daemon_on = False
+
+        def work():
+            return uninstall_task()
+        def done(res):
+            self._refresh_autostart()
+            self._sync_tray_menu()
+            if self.tray:
+                try:
+                    self.tray.bubble("后台守护已停止", f"{reason}。恢复方式：托盘菜单「恢复后台守护」。")
+                except Exception:
+                    pass
+        self._bg(work, done, busy=False)
+
+    def _resume_daemon(self):
+        """恢复后台守护：重新注册计划任务 + 恢复内嵌循环。"""
+        self._daemon_on = True
+        try:
+            interval = int(self.spn_interval.get())
+        except ValueError:
+            interval = 1
+        self._bg(lambda: install_task(interval),
+                 lambda res: (self._refresh_autostart(), self._sync_tray_menu()))
 
     # ---------- ttk 主题与配色
 
@@ -533,29 +582,36 @@ class App(tk.Tk):
         self.chk_show.grid(row=1, column=2, sticky="w", padx=6)
         self.chk_show.bind("<Button-1>", lambda _e: self._toggle_show())
 
-        ttk.Label(acct, text="服务:").grid(row=2, column=0, sticky="e", padx=8, pady=4)
+        ttk.Label(acct, text="校区:").grid(row=2, column=0, sticky="e", padx=8, pady=4)
+        self.cmb_area = ttk.Combobox(acct, values=list(CAMPUS_AREA), width=26, state="readonly")
+        self.cmb_area.current(0)
+        self.cmb_area.grid(row=2, column=1, columnspan=2, sticky="w", pady=4)
+        self.cmb_area.bind("<<ComboboxSelected>>", lambda _e: self._on_campus_area())
+
+        ttk.Label(acct, text="服务:").grid(row=3, column=0, sticky="e", padx=8, pady=4)
         self.cmb_service = ttk.Combobox(acct, values=SERVICE_CHOICES, width=12, state="readonly")
         self.cmb_service.current(0)
-        self.cmb_service.grid(row=2, column=1, sticky="w", pady=4)
-        ttk.Label(acct, text="（服务按校区自动适配，无需选校区）", style="TMuted.TLabel"
-                  ).grid(row=2, column=2, sticky="w")
+        self.cmb_service.grid(row=3, column=1, sticky="w", pady=4)
+        self.lbl_service_hint = ttk.Label(acct, text="金坛校区服务已实测，可直接选择",
+                                          style="TMuted.TLabel", wraplength=300, justify="left")
+        self.lbl_service_hint.grid(row=3, column=2, sticky="w")
 
         self.lbl_real = ttk.Label(acct, text="", wraplength=500, justify="left")
-        self.lbl_real.grid(row=3, column=1, columnspan=2, sticky="w", pady=(0, 4))
+        self.lbl_real.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 4))
 
         btns = ttk.Frame(acct)
-        btns.grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=2)
+        btns.grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=2)
         self.btn_fetch = ttk.Button(btns, text="一键抓取账号和服务", style="Accent.TButton",
                                     command=self.on_fetch)
         self.btn_fetch.pack(side="left", padx=(0, 8))
         self.btn_save = ttk.Button(btns, text="保存配置", command=self.on_save)
         self.btn_save.pack(side="left")
 
-        guard = ttk.LabelFrame(self, text="▍守护设置")
+        guard = ttk.LabelFrame(self, text="▍设置")
         guard.pack(fill="x", padx=10, pady=6)
         self.var_autostart = tk.BooleanVar(value=False)
         self.var_exit_online = tk.BooleanVar(value=False)
-        self.ckb_auto = tk.Label(guard, text="☐ 开机自启（后台守护，掉线自动恢复）", cursor="hand2")
+        self.ckb_auto = tk.Label(guard, text="☐ 开机自启（启动后每隔一定时间检测一次登录状态，掉线自动重登）", cursor="hand2")
         self.ckb_auto.pack(anchor="w", padx=10, pady=4)
         self.ckb_auto.bind("<Button-1>", lambda _e: self._toggle_auto())
 
@@ -566,7 +622,7 @@ class App(tk.Tk):
         self.spn_interval.pack(side="left", padx=4)
         ttk.Label(row2, text="分钟（保存配置后生效）", style="TMuted.TLabel").pack(side="left")
 
-        self.chk_exit_online = tk.Label(guard, text="☐ 上线后自动退出控制台（只想开机登录一次的人勾这个）",
+        self.chk_exit_online = tk.Label(guard, text="☐ 上线后自动停止守护（不再自动登录，适合只想开机登录一次的人）",
                                         cursor="hand2")
         self.chk_exit_online.pack(anchor="w", padx=10, pady=2)
         self.chk_exit_online.bind(
@@ -574,12 +630,12 @@ class App(tk.Tk):
             lambda _e: self._toggle_flag(self.var_exit_online, self._sync_exit_online))
         row_exit = ttk.Frame(guard)
         row_exit.pack(anchor="w", padx=10, pady=2)
-        ttk.Label(row_exit, text="或：控制台运行").pack(side="left")
+        ttk.Label(row_exit, text="或：后台守护运行").pack(side="left")
         self.spn_exit_min = ttk.Spinbox(row_exit, from_=0, to=1440, width=5)
         self.spn_exit_min.pack(side="left", padx=4)
-        ttk.Label(row_exit, text="分钟后自动退出（0=不启用）", style="TMuted.TLabel").pack(side="left")
+        ttk.Label(row_exit, text="分钟后自动停止（0=不启用）", style="TMuted.TLabel").pack(side="left")
 
-        ttk.Label(guard, text="WiFi 门卫（不在校园 WiFi 时守护自动跳过）:").pack(anchor="w", padx=10)
+        ttk.Label(guard, text="WiFi 门卫（连接非校园网时是否尝试登录）:").pack(anchor="w", padx=10)
         self.cmb_campus = ttk.Combobox(guard, values=list(CAMPUS_CHOICES), width=28, state="readonly")
         self.cmb_campus.pack(anchor="w", padx=10, pady=2)
 
@@ -625,6 +681,11 @@ class App(tk.Tk):
         self.var_exit_online.set(cfg["auto_exit_after_login"])
         self.spn_exit_min.delete(0, "end")
         self.spn_exit_min.insert(0, str(cfg["auto_exit_minutes"]))
+        for label, (value, _svcs) in CAMPUS_AREA.items():
+            if value == cfg["campus_area"]:
+                self.cmb_area.set(label)
+                break
+        self._sync_area_hint()
         ssid = cfg["wifi_ssid"]
         for label, value in CAMPUS_CHOICES.items():
             if (ssid and ssid.lower() in value.lower()) or value.lower() == ssid.lower():
@@ -644,19 +705,68 @@ class App(tk.Tk):
 
     def _sync_auto(self):
         on = self.var_autostart.get()
-        self.ckb_auto.config(text=("☑" if on else "☐") + " 开机自启（后台守护，掉线自动恢复）",
+        self.ckb_auto.config(text=("☑" if on else "☐") + " 开机自启（启动后每隔一定时间检测一次登录状态，掉线自动重登）",
                              fg=self.th["accent"] if on else self.th["fg"],
                              bg=self.th["bg"])
 
     def _sync_exit_online(self):
         on = self.var_exit_online.get()
         self.chk_exit_online.config(
-            text=("☑" if on else "☐") + " 上线后自动退出控制台（只想开机登录一次的人勾这个）",
+            text=("☑" if on else "☐") + " 上线后自动停止守护（不再自动登录，适合只想开机登录一次的人）",
             fg=self.th["accent"] if on else self.th["fg"], bg=self.th["bg"])
 
     def _toggle_flag(self, var, sync_fn):
         var.set(not var.get())
         sync_fn()
+
+    # ---------- 校区与服务联动
+
+    def _sync_area_hint(self):
+        """按所选校区更新服务选择：金坛用实测静态配置，其他校区现场抓取。"""
+        area = self.cmb_area.get()
+        if area.startswith("金坛"):
+            self.cmb_service["values"] = SERVICE_CHOICES
+            if self.cmb_service.get() not in SERVICE_CHOICES:
+                self.cmb_service.set("校园网")
+            self.lbl_service_hint.config(text="金坛校区服务已实测，可直接选择",
+                                         foreground=self.th["muted"])
+        else:
+            self.lbl_service_hint.config(text="正在抓取本校区服务列表...",
+                                         foreground=self.th["muted"])
+            self._bg(lambda: hl.fetch_services(), self._on_services_fetched, busy=False)
+
+    def _on_campus_area(self):
+        self._sync_area_hint()
+
+    def _on_services_fetched(self, services):
+        if not isinstance(services, list) or not services:
+            self.lbl_service_hint.config(
+                text="✗ 抓取不到服务列表：请确认已连接对应校区校园网后重试",
+                foreground=self.th["err"])
+            return
+        displays = [d for _v, d, _i in services]
+        self.cmb_service["values"] = displays
+        self.cmb_service.set(displays[0])
+        self.lbl_service_hint.config(text=f"✓ 已获取本校区 {len(displays)} 项服务，请选择",
+                                     foreground=self.th["ok"])
+
+    def _fetch_and_pick_service(self, real):
+        """一键抓取（非金坛校区）：拉服务列表并选中当前会话对应的服务。"""
+        def done(services):
+            if isinstance(services, list) and services:
+                displays = [d for _v, d, _i in services]
+                self.cmb_service["values"] = displays
+                match = next((d for v, d, _i in services if real in (v, d)), displays[0])
+                self.cmb_service.set(match)
+                self.lbl_service_hint.config(text=f"✓ 已获取本校区 {len(displays)} 项服务",
+                                             foreground=self.th["ok"])
+            else:
+                kw = hl.detect_carrier_keyword(real)
+                if kw in SERVICE_CHOICES:
+                    self.cmb_service.set(kw)
+                self.lbl_service_hint.config(
+                    text="抓取服务列表失败，已按关键词「" + kw + "」选择", foreground=self.th["err"])
+        return done
 
     def _toggle_auto(self):
         self.var_autostart.set(not self.var_autostart.get())
@@ -773,8 +883,11 @@ class App(tk.Tk):
             kw = hl.detect_carrier_keyword(real)
             self.ent_user.delete(0, "end")
             self.ent_user.insert(0, username)
-            if kw in SERVICE_CHOICES:
-                self.cmb_service.set(kw)
+            if self.cmb_area.get().startswith("金坛"):
+                if kw in SERVICE_CHOICES:
+                    self.cmb_service.set(kw)
+            else:
+                self._bg(lambda: hl.fetch_services(), self._fetch_and_pick_service(real), busy=False)
             self.lbl_real.config(
                 text=f"✓ 抓取成功: {username} · 当前服务「{real}」→ 已选关键词「{kw}」",
                 foreground=self.th["ok"])
@@ -783,7 +896,8 @@ class App(tk.Tk):
     def on_save(self):
         username = self.ent_user.get().strip()
         password = self.ent_pass.get().strip()
-        service = self.cmb_service.get().strip() or "校园网"
+        service_sel = self.cmb_service.get().strip() or "校园网"
+        service = service_sel if service_sel in SERVICE_CHOICES else (hl.detect_carrier_keyword(service_sel) or "校园网")
         try:
             interval = int(self.spn_interval.get())
         except ValueError:
@@ -801,7 +915,8 @@ class App(tk.Tk):
         def work():
             save_all(username, password, service, interval, ssid,
                      auto_exit_after_login=self.var_exit_online.get(),
-                     auto_exit_minutes=exit_min)
+                     auto_exit_minutes=exit_min,
+                     campus_area=CAMPUS_AREA.get(self.cmb_area.get(), ("jintan",))[0])
             sync_runtime_config(read_config())
             if self.var_autostart.get():
                 return install_task(interval)
