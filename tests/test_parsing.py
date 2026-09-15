@@ -69,3 +69,24 @@ def urllib_quote_twice(s: str) -> str:
     import urllib.parse
     safe = "-_.!~*'()"
     return urllib.parse.quote(urllib.parse.quote(s, safe=safe), safe=safe)
+
+
+# 真实抓包片段：InterFace.do?method=getServices 响应的 serviceContent 字段
+# （服务列表由页面 JS 调该接口动态注入，登录页原始 HTML 里没有。2026-09 实测）
+GETSERVICES_SERVICE_CONTENT = (
+    "<div id='bch_service_0' onclick=\"selectService('校园外网服务(out-campus NET)','校园网(Campus NET)','0')\">"
+    "<input name=\"net_access_type\" id=\"net_access_type\" value='校园外网服务(out-campus NET)' type=\"hidden\"/>"
+    "<div id='bch_service_1' onclick=\"selectService('中国移动(CMCC NET)','中国移动(CMCC NET)','1')\">"
+    "<div id='bch_service_2' onclick=\"selectService('中国电信(常州)','中国电信(CTCC NET)','2')\">"
+    "<div id='bch_service_3' onclick=\"selectService('中国联通(常州)','中国联通(CUCC NET)','3')\">"
+)
+
+
+def test_fetch_services_parses_service_content_field():
+    """fetch_services 的解析约定：接口响应 serviceContent 里的 selectService 项可被 SERVICE_RE 提取。"""
+    services = hl.parse_services(GETSERVICES_SERVICE_CONTENT)
+    assert len(services) == 4
+    assert hl.pick_service(services, "联通") == "中国联通(常州)"
+    assert hl.pick_service(services, "移动") == "中国移动(CMCC NET)"
+    assert hl.pick_service(services, "电信") == "中国电信(常州)"
+    assert hl.pick_service(services, "校园网") == "校园外网服务(out-campus NET)"
