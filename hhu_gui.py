@@ -8,7 +8,7 @@
 定位：后台守护由计划任务每分钟无窗口运行，本窗口是它的"驾驶舱"——
     账号配置：一键抓取账号与服务（也可手填），保存即生效
     守护设置：开机自启开关、检测间隔、立即检测登录状态、退出账号、实时日志
-    主题：默认（浅色）/ 方舟行动（深色工业风，遵循 ak-ui 设计契约）
+    主题：默认（浅色）/ 暗黑（深色工业风，遵循 ak-ui 设计契约）
 所有网络/子进程操作都在后台线程执行，界面不卡顿。
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ THEMES: dict[str, dict] = {
         accent="#0067c0", ok="#0a7d32", err="#b3261e",
         log_bg="#ffffff", log_fg="#333333", link="#0067c0",
     ),
-    "方舟行动": dict(
+    "暗黑": dict(
         bg="#1b1b1d", panel="#232326", fg="#e6e6e6", muted="#8f8f94",
         border="#3a3a3f", entry_bg="#2a2a2e", entry_fg="#f0f0f0",
         btn_bg="#2e2e33", btn_fg="#e6e6e6", btn_border="#4a4a51",
@@ -341,7 +341,8 @@ class App(tk.Tk):
     def _sync_show(self):
         on = self.var_show.get()
         self.chk_show.config(text=("☑" if on else "☐") + " 显示密码",
-                             fg=self.th["accent"] if on else self.th["muted"])
+                             fg=self.th["accent"] if on else self.th["muted"],
+                             bg=self.th["bg"])
         self.ent_pass.config(show="" if on else "•")
 
     def _toggle_show(self):
@@ -351,7 +352,8 @@ class App(tk.Tk):
     def _sync_auto(self):
         on = self.var_autostart.get()
         self.ckb_auto.config(text=("☑" if on else "☐") + " 开机自启（后台守护，掉线自动恢复）",
-                             fg=self.th["accent"] if on else self.th["fg"])
+                             fg=self.th["accent"] if on else self.th["fg"],
+                             bg=self.th["bg"])
 
     def _toggle_auto(self):
         self.var_autostart.set(not self.var_autostart.get())
