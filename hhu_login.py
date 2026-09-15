@@ -64,6 +64,10 @@ interval_minutes = 1
 ; 留空 = 不检查（接网线的同学请留空）。
 ; 说明：检测不到 WiFi 名称（如网线直连）时会放行，不会误伤有线用户。
 wifi_ssid = Hohai University
+; 仅控制台（hhu_gui）读取：登录成功上线后自动退出控制台（适合只想开机登录一次的人）
+auto_exit_after_login = false
+; 仅控制台（hhu_gui）读取：控制台运行 N 分钟后自动退出（0=不启用）
+auto_exit_minutes = 0
 
 [advanced]
 ; 是否写调试日志 logs/hhu_login_debug.log
