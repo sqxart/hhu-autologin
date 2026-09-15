@@ -217,7 +217,9 @@ class App(tk.Tk):
         self.configure(bg=t["bg"])
         self.txt_log.config(bg=t["log_bg"], fg=t["log_fg"],
                             insertbackground=t["log_fg"])
-        self.lbl_link.config(fg=t["link"])
+        self.lbl_link.config(fg=t["link"], bg=t["bg"])
+        self._sync_show()
+        self._sync_auto()
         self._refresh_status()  # 动态状态色按新主题立即重刷
 
     # ---------- 布局
@@ -249,10 +251,11 @@ class App(tk.Tk):
         ttk.Label(acct, text="密码:").grid(row=1, column=0, sticky="e", padx=8, pady=4)
         self.ent_pass = ttk.Entry(acct, width=30, show="•")
         self.ent_pass.grid(row=1, column=1, sticky="w", pady=4)
+        # 自绘勾选标记（ttk clam 指示器画的是叉，有歧义；☐/☑ 跟主题色走）
         self.var_show = tk.BooleanVar(value=False)
-        ttk.Checkbutton(acct, text="显示密码", variable=self.var_show,
-                        command=lambda: self.ent_pass.config(show="" if self.var_show.get() else "•")
-                        ).grid(row=1, column=2, sticky="w", padx=6)
+        self.chk_show = tk.Label(acct, text="☐ 显示密码", cursor="hand2")
+        self.chk_show.grid(row=1, column=2, sticky="w", padx=6)
+        self.chk_show.bind("<Button-1>", lambda _e: self._toggle_show())
 
         ttk.Label(acct, text="服务:").grid(row=2, column=0, sticky="e", padx=8, pady=4)
         self.cmb_service = ttk.Combobox(acct, values=SERVICE_CHOICES, width=12, state="readonly")
@@ -275,9 +278,9 @@ class App(tk.Tk):
         guard = ttk.LabelFrame(self, text="▍守护设置")
         guard.pack(fill="x", padx=10, pady=6)
         self.var_autostart = tk.BooleanVar(value=False)
-        self.ckb_auto = ttk.Checkbutton(guard, text="开机自启（后台每分钟守护，掉线自动恢复）",
-                                        variable=self.var_autostart, command=self.on_toggle_autostart)
+        self.ckb_auto = tk.Label(guard, text="☐ 开机自启（后台守护，掉线自动恢复）", cursor="hand2")
         self.ckb_auto.pack(anchor="w", padx=10, pady=4)
+        self.ckb_auto.bind("<Button-1>", lambda _e: self._toggle_auto())
 
         row2 = ttk.Frame(guard)
         row2.pack(anchor="w", padx=10, pady=2)
@@ -300,7 +303,7 @@ class App(tk.Tk):
         self.btn_log = ttk.Button(row3, text="打开日志文件夹", command=self.on_open_log)
         self.btn_log.pack(side="left")
 
-        logf = ttk.LabelFrame(self, text="▍实时日志（每分钟心跳 / 掉线与登录记录）")
+        logf = ttk.LabelFrame(self, text="▍实时日志（每次检测 / 掉线与登录记录）")
         logf.pack(fill="x", padx=10, pady=6)
         self.txt_log = tk.Text(logf, height=8, width=68, state="disabled", wrap="none",
                                font=("Consolas", 9), relief="flat",
@@ -334,6 +337,26 @@ class App(tk.Tk):
             if (ssid and ssid.lower() in value.lower()) or value.lower() == ssid.lower():
                 self.cmb_campus.set(label)
                 break
+
+    def _sync_show(self):
+        on = self.var_show.get()
+        self.chk_show.config(text=("☑" if on else "☐") + " 显示密码",
+                             fg=self.th["accent"] if on else self.th["muted"])
+        self.ent_pass.config(show="" if on else "•")
+
+    def _toggle_show(self):
+        self.var_show.set(not self.var_show.get())
+        self._sync_show()
+
+    def _sync_auto(self):
+        on = self.var_autostart.get()
+        self.ckb_auto.config(text=("☑" if on else "☐") + " 开机自启（后台守护，掉线自动恢复）",
+                             fg=self.th["accent"] if on else self.th["fg"])
+
+    def _toggle_auto(self):
+        self.var_autostart.set(not self.var_autostart.get())
+        self._sync_auto()
+        self.on_toggle_autostart()
 
     # ---------- 后台线程骨架
 
@@ -408,12 +431,13 @@ class App(tk.Tk):
         self._bg(work, done, busy=False)
 
     def _refresh_autostart(self):
-        """让勾选框反映计划任务真实状态（启动时与自启操作后调用）。"""
+        """让勾选标记反映计划任务真实状态（启动时与自启操作后调用）。"""
         def work():
             return task_exists()
         def done(res):
             if isinstance(res, bool):
                 self.var_autostart.set(res)
+                self._sync_auto()
         self._bg(work, done, busy=False)
 
     # ---------- 动作
