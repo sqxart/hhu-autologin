@@ -68,7 +68,7 @@ wifi_ssid = Hohai University
 debug = true
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
@@ -331,6 +331,28 @@ def parse_services(html: str):
     return [(v, d, i) for v, d, i in SERVICE_RE.findall(html)]
 
 
+def fetch_services(query_string: str = ""):
+    """登录页的服务列表由页面 JS 调 getServices 接口动态注入，原始 HTML 里没有。
+
+    纯 HTTP 也能调通该接口：POST InterFace.do?method=getServices（body 为空），
+    服务选项就藏在响应 serviceContent 字段的 selectService(...) HTML 里。
+    接口对 queryString 很宽容：不带参数也返回全量服务列表。
+    """
+    url = INTERFACE + "getServices"
+    if query_string:
+        url += "&queryString=" + urllib.parse.quote(query_string, safe="")
+    s, _, b = http(url, timeout=8, data="")
+    if s != 200:
+        dlog(f"getServices http {s}")
+        return []
+    try:
+        j = json.loads(b.decode("utf-8", errors="replace"))
+    except Exception:
+        dlog("getServices: response not json")
+        return []
+    return parse_services(j.get("serviceContent", ""))
+
+
 def pick_service(services, keyword: str):
     """按关键词匹配服务；返回内部值或 None。"""
     kw = keyword.strip().lower()
@@ -351,6 +373,8 @@ def do_login() -> int:
     qs = url.split("?", 1)[1]
 
     services = parse_services(html)
+    if not services:
+        services = fetch_services(qs)  # 页面原始 HTML 无服务列表，走接口拉取
     service = pick_service(services, CONFIG["service"])
     if service is None:
         m = NAT_RE.search(html)
@@ -497,6 +521,10 @@ def run_check() -> int:
         return 1
     say(f"[5] 门户链路: √ {url[:90]}...")
     services = parse_services(html)
+    if not services:
+        services = fetch_services(urllib.parse.urlsplit(url).query)
+        if services:
+            say("    （服务列表来自 getServices 接口）")
     if services:
         say("[6] 服务列表:")
         pick = pick_service(services, CONFIG["service"])
