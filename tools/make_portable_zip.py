@@ -7,13 +7,17 @@
     python tools/make_portable_zip.py --dist dist --out .
 
 产物结构（新手解压后一眼能看到说明书）:
-    河海校园网自动登录_v1.4.0_便携版.zip
+    hhu-autologin_v1.4.0_portable.zip        ← 外层用 ASCII 名
       ├── 使用前必读！！！.txt
-      └── 河海校园网自动登录/
+      └── 河海校园网自动登录/                 ← 内部条目保持中文
             ├── 使用前必读！！！.txt   （同一份，防止只拷文件夹时丢了说明书）
             ├── hhu_gui.exe
             ├── hhu_login.exe
             └── hhu_campus_report.exe
+
+注意：zip 文件名必须 ASCII——GitHub 会把 Release 附件名里的非 ASCII
+字符直接删掉（实测中文名上传后变成 "_v1.4.0_.zip"）；压缩包内部条目
+不受影响，保持中文。
 """
 from __future__ import annotations
 
@@ -53,7 +57,7 @@ def make_zip(dist: Path, out_dir: Path) -> Path:
         print(f"[!] 未找到 {', '.join(skipped)}，将不打进压缩包")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"河海校园网自动登录_v{app_version()}_便携版.zip"
+    zip_path = out_dir / f"hhu-autologin_v{app_version()}_portable.zip"   # ASCII 名，见模块 docstring
     guide_bytes = guide.read_bytes()
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
