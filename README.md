@@ -12,10 +12,14 @@
 
 ## 🚀 三步上手（不需要任何电脑知识）
 
-1. 打开 [Releases 下载页](../../releases)，下载 **`hhu-autologin_v1.4.1_portable.zip`**（便携版压缩包），解压后按里面的 **「使用前必读！！！.txt」** 操作
+
+> **系统要求**：打包版 exe 需要 **Windows 10（1607+）或 Windows 11，64 位**——不想装 Python 就用打包版。
+> 源码方式支持 Windows / macOS / Linux，需 Python 3.8+（macOS/Linux 走命令行方式，见下方）。
+
+1. 打开 [Releases 下载页](../../releases)，下载 **`hhu-autologin_v1.4.2_portable.zip`**（便携版压缩包），解压后按里面的 **「使用前必读！！！.txt」** 操作
    ⚠️ 不要点 "Source code"——那只是源代码，不是软件
    （也可以只下载 `hhu_gui.exe` + `hhu_login.exe` 两个文件，放进同一个文件夹，比如 `D:\校园网工具`）
-2. 将你下载的**`hhu-autologin_v1.4.1_portable.zip`**放在一个固定位置，不要放在桌面也不要留在下载文件夹，放在一个你记得在哪且之后不会再移动/乱动的地方，或者直接去C盘（D盘也行）新建一个文件夹放进去，再解压**`hhu-autologin_v1.4.1_portable.zip`**。
+2. 将你下载的**`hhu-autologin_v1.4.2_portable.zip`**放在一个固定位置，不要放在桌面也不要留在下载文件夹，放在一个你记得在哪且之后不会再移动/乱动的地方，或者直接去C盘（D盘也行）新建一个文件夹放进去，再解压**`hhu-autologin_v1.4.2_portable.zip`**。
 3. 在浏览器登录一次校园网，保持在已登录的校园网环境下进行后续操作 → 双击 `hhu_gui.exe` → 点「一键抓取账号和服务」→ 输入密码 → 勾选「开机自启」→ 点「保存配置」
 4. 完成！以后开机自动守护，掉线自动恢复（不想用图形界面就看下方命令行方式）
 

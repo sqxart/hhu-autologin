@@ -374,7 +374,15 @@ class App(tk.Tk):
     def __init__(self, start_hidden: bool = False):
         super().__init__()
         self.title(f"河海校园网自动登录 · 控制台 v{hl.__version__}")
-        self.geometry("660x860")
+        # 高 DPI：按真实缩放比放大窗口/字体/间距；屏幕放不下时转紧凑布局
+        dpi = self.winfo_fpixels("1i") or 96.0
+        self._dpi_scale = max(1.0, dpi / 96.0)
+        self.tk.call("tk", "scaling", dpi / 72.0)
+        need_w, need_h = int(660 * self._dpi_scale), int(860 * self._dpi_scale)
+        screen_h = self.winfo_screenheight()
+        self._compact = need_h > screen_h - 60   # 小屏笔记本 / 超高缩放：压缩间距塞下全部功能
+        self._pv = 3 if self._compact else 6     # 统一区块间距
+        self.geometry(f"{need_w}x{min(need_h, screen_h - 60)}")
         self.resizable(False, False)
         self.th = THEMES["默认"]
         self._last_log_text = ""
@@ -383,9 +391,9 @@ class App(tk.Tk):
         self._daemon_on = True
         self._build_style()
         self._build()
-        try:  # 方舟风窗口/任务栏图标（内存 PNG，无资源文件）
-            self._icon_ref = tk.PhotoImage(data=ak_icon.ak_icon_png(48))
-            self.iconphoto(True, self._icon_ref)
+        try:  # 方舟风窗口/任务栏图标（内存 PNG，无资源文件；多尺寸供系统挑选）
+            self._icon_refs = [tk.PhotoImage(data=ak_icon.ak_icon_png(s)) for s in (32, 48)]
+            self.iconphoto(True, *self._icon_refs)
         except Exception:
             pass
         self.apply_theme("默认")
@@ -581,10 +589,11 @@ class App(tk.Tk):
     # ---------- 布局
 
     def _build(self):
-        pad = {"padx": 10, "pady": 6}
+        pad = {"padx": 10, "pady": self._pv}
+        wrap = lambda w: int(w * self._dpi_scale)   # 折行宽度是像素单位，须随缩放放大
 
         top = ttk.LabelFrame(self, text="当前状态")
-        top.pack(fill="x", padx=10, pady=(8, 6))
+        top.pack(fill="x", padx=10, pady=(self._pv + 2, self._pv))
         row = ttk.Frame(top)
         row.pack(fill="x", padx=10, pady=4)
         self.lbl_status = ttk.Label(row, text="状态: 检测中...")
@@ -595,11 +604,11 @@ class App(tk.Tk):
         ttk.Label(row, text="主题:").pack(side="right")
         self.cmb_theme.bind("<<ComboboxSelected>>",
                             lambda _e: self.apply_theme(self.cmb_theme.get()))
-        self.lbl_flag = ttk.Label(top, text="", wraplength=600, justify="left")
+        self.lbl_flag = ttk.Label(top, text="", wraplength=wrap(600), justify="left")
         self.lbl_flag.pack(anchor="w", padx=10, pady=(0, 4))
 
         acct = ttk.LabelFrame(self, text="▍账号配置")
-        acct.pack(fill="x", padx=10, pady=6)
+        acct.pack(fill="x", padx=10, pady=self._pv)
         ttk.Label(acct, text="学号:").grid(row=0, column=0, sticky="e", padx=8, pady=4)
         self.ent_user = ttk.Entry(acct, width=30)
         self.ent_user.grid(row=0, column=1, columnspan=2, sticky="w", pady=4)
@@ -624,10 +633,10 @@ class App(tk.Tk):
         self.cmb_service.current(0)
         self.cmb_service.grid(row=3, column=1, sticky="w", pady=4)
         self.lbl_service_hint = ttk.Label(acct, text="金坛校区服务已实测，可直接选择",
-                                          style="TMuted.TLabel", wraplength=300, justify="left")
+                                          style="TMuted.TLabel", wraplength=wrap(300), justify="left")
         self.lbl_service_hint.grid(row=3, column=2, sticky="w")
 
-        self.lbl_real = ttk.Label(acct, text="", wraplength=600, justify="left")
+        self.lbl_real = ttk.Label(acct, text="", wraplength=wrap(600), justify="left")
         self.lbl_real.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 4))
 
         btns = ttk.Frame(acct)
@@ -639,7 +648,7 @@ class App(tk.Tk):
         self.btn_save.pack(side="left")
 
         guard = ttk.LabelFrame(self, text="▍设置")
-        guard.pack(fill="x", padx=10, pady=6)
+        guard.pack(fill="x", padx=10, pady=self._pv)
         self.var_autostart = tk.BooleanVar(value=False)
         self.var_exit_online = tk.BooleanVar(value=False)
         self.ckb_auto = tk.Label(guard, text="☐ 开机自启（启动后每隔一定时间检测一次登录状态，掉线自动重登）", cursor="hand2")
@@ -686,7 +695,7 @@ class App(tk.Tk):
         self.cmb_campus.pack(anchor="w", padx=10, pady=2)
 
         row3 = ttk.Frame(guard)
-        row3.pack(anchor="w", padx=10, pady=6)
+        row3.pack(anchor="w", padx=10, pady=self._pv)
         self.btn_check = ttk.Button(row3, text="立即检测登录状态", style="Accent.TButton",
                                     command=self.on_check)
         self.btn_check.pack(side="left", padx=(0, 8))
@@ -696,14 +705,15 @@ class App(tk.Tk):
         self.btn_log.pack(side="left")
 
         logf = ttk.LabelFrame(self, text="▍实时日志（每次检测 / 掉线与登录记录）")
-        logf.pack(fill="x", padx=10, pady=6)
-        self.txt_log = tk.Text(logf, height=8, width=68, state="disabled", wrap="none",
-                               font=("Consolas", 9), relief="flat",
-                               highlightthickness=1)
-        self.txt_log.pack(fill="x", padx=8, pady=6)
+        logf.pack(fill="x", padx=10, pady=self._pv)
+        self.txt_log = tk.Text(logf, height=(2 if self._compact else 8), width=68,
+                               state="disabled", wrap="none",
+                               font=("Consolas", max(9, round(9 * self._dpi_scale))),
+                               relief="flat", highlightthickness=1)
+        self.txt_log.pack(fill="x", padx=8, pady=self._pv)
 
         bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 8))
+        bottom.pack(fill="x", padx=10, pady=(0, self._pv + 2))
         self.btn_clear = ttk.Button(bottom, text="重置断路保护", command=self.on_clear_flag)
         self.btn_clear.pack(side="left")
         self.btn_clear.config(state="disabled")
@@ -715,7 +725,7 @@ class App(tk.Tk):
         self.lbl_clear_hint = ttk.Label(
             self, text="（登录时密码错误触发断路保护，不再尝试登录）",
             style="TMuted.TLabel")
-        self.lbl_clear_hint.pack(anchor="w", padx=12, pady=(0, 8))
+        self.lbl_clear_hint.pack(anchor="w", padx=12, pady=(0, self._pv + 2))
 
         self._fill_from_config()
 
@@ -1038,8 +1048,33 @@ class App(tk.Tk):
         messagebox.showinfo("已重置", "断路保护已重置，守护将恢复自动登录")
 
 
+def _enable_dpi_awareness():
+    """高 DPI 适配：必须在创建任何窗口之前声明，否则系统会位图拉伸整个界面（发虚）。
+
+    依次尝试 Per-Monitor v2（Win10 1703+）→ 系统级感知（Win10 1607+）→ 老 API 兜底。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        _user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+        if _user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.WinDLL("shcore").SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        _user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def main() -> int:
     import argparse
+    _enable_dpi_awareness()   # 必须在 Tk() 创建之前
     parser = argparse.ArgumentParser(description="河海校园网自动登录 · 可视化控制台")
     parser.add_argument("--tray", action="store_true", help="启动时缩到系统托盘（不显示窗口）")
     args = parser.parse_args()
