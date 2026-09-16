@@ -7,13 +7,23 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Python 3.8 是 README 承诺的最低版本——矩阵锁住这个承诺，
+    # 每次推送都在真实 Windows 上验证（用户平台），外加 Ubuntu 验证 CLI 跨平台。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.8", "3.10", "3.12"]
+        exclude:
+          - os: ubuntu-latest
+            python: "3.8"   # ubuntu-latest(24.04) 已无 3.8 预编译；3.8 验证由 Windows 覆盖
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: Run unit tests
         run: |
           pip install pytest
-          python -m pytest tests/ -v
+          python -m pytest tests/ -q

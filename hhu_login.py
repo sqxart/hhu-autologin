@@ -74,7 +74,7 @@ auto_exit_minutes = 0
 debug = true
 """
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
