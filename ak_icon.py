@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """方舟风应用图标：像素绘制 + 内存 PNG，供 hhu_gui 的窗口图标与托盘图标使用。
 
-设计遵循 ak-ui 设计契约：深石墨面层、黄色行动信号、绿色在线信号，
+设计遵循 ak-ui 设计契约：海蓝面层（河海校色）、黄色行动信号、绿色在线信号，
 工业几何（圆角底板 + 右上斜切角），零外部资源文件。
 """
 import zlib
@@ -13,8 +13,8 @@ def _ak_icon_rgba(size: int) -> bytes:
     """渲染 size×size 的 RGBA 像素数据（行优先）。"""
     S = 4 if size <= 64 else 1
     W = size * S
-    dark = (35, 35, 38, 255)
-    dark_hi = (48, 48, 52, 255)
+    dark = (13, 77, 130, 255)      # 深海蓝（下）
+    dark_hi = (22, 100, 164, 255)   # 海蓝（上，面层亮部）
     yellow = (255, 204, 0, 255)
     green = (30, 200, 100, 255)
     transparent = (0, 0, 0, 0)
@@ -117,6 +117,28 @@ def png_from_rgba(size: int, raw: bytes) -> bytes:
 
 def ak_icon_png(size: int = 48) -> bytes:
     return png_from_rgba(size, _ak_icon_rgba(size))
+
+
+def ico_from_pngs(images) -> bytes:
+    """把若干 (尺寸, PNG 字节) 打包成 .ico。
+
+    Vista+ 支持 .ico 里直接放 PNG（32 位带 alpha），打包多尺寸后
+    系统会按屏幕 DPI 自动挑最合适的一张，托盘图标不再糊。
+    """
+    head = struct.pack("<HHH", 0, 1, len(images))
+    offset = 6 + 16 * len(images)
+    entries, blobs = b"", b""
+    for size, png in images:
+        wh = 0 if size >= 256 else size          # 256 在 ICO 里记作 0
+        entries += struct.pack("<BBBBHHII", wh, wh, 0, 0, 1, 32, len(png), offset)
+        offset += len(png)
+        blobs += png
+    return head + entries + blobs
+
+
+def ak_icon_ico(sizes=(16, 20, 24, 32, 48)) -> bytes:
+    """多尺寸方舟风 .ico（供系统托盘使用）。"""
+    return ico_from_pngs([(s, ak_icon_png(s)) for s in sizes])
 
 
 if __name__ == "__main__":

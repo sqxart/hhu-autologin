@@ -23,6 +23,12 @@ jobs:
           pip install pyinstaller
           pyinstaller --onefile --clean --name hhu_login hhu_login.py
           pyinstaller --onefile --clean --windowed --name hhu_gui hhu_gui.py
+          pyinstaller --onefile --clean --name hhu_campus_report hhu_campus_report.py
+
+      - name: Make portable package (exe + 使用前必读！！！.txt)
+        env:
+          PYTHONUTF8: "1"      # runner 控制台非 UTF-8，不设的话打印中文文件名会崩
+        run: python tools/make_portable_zip.py --dist dist --out release
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -31,9 +37,11 @@ jobs:
           path: |
             dist/hhu_login.exe
             dist/hhu_gui.exe
+            dist/hhu_campus_report.exe
+            release/*.zip
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.ref_name }} dist/hhu_login.exe dist/hhu_gui.exe --title "hhu-autologin ${{ github.ref_name }}" --generate-notes
+        run: gh release create ${{ github.ref_name }} dist/hhu_login.exe dist/hhu_gui.exe dist/hhu_campus_report.exe release/*.zip --title "hhu-autologin ${{ github.ref_name }}" --generate-notes
