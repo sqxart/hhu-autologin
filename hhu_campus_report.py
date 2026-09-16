@@ -15,7 +15,9 @@
     * 报告生成后你可以先打开自查，再决定是否发送
 
 纯 Python 标准库，无任何第三方依赖，兼容 Python 3.8+。
+也可以直接运行打包好的 hhu_campus_report.exe（无需安装 Python）。
 """
+import os
 import re
 import socket
 import subprocess
@@ -25,11 +27,47 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-for _stream in (sys.stdout, sys.stderr):
+MIN_PY = (3, 8)
+if sys.version_info < MIN_PY:
+    # 版本太旧时只能尽量把话说明白（老版本 Python 可能连语法都过不了）
+    print("=" * 56)
+    print("  你的 Python 版本太旧：%d.%d" % sys.version_info[:2])
+    print("  本脚本需要 Python 3.8 或更高版本。")
+    print("  两个办法（任选其一）：")
+    print("    1) 去 python.org 下载新版 Python，安装时勾选 Add to PATH")
+    print("    2) 改用 hhu_campus_report.exe（免安装 Python，推荐）")
+    print("=" * 56)
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        input("\n按回车键退出...")
     except Exception:
         pass
+    sys.exit(1)
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        # 真实控制台走的是 Windows 的 Unicode 接口，别去改它的编码（改了中文会花屏）
+        if not _stream.isatty():
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def here() -> str:
+    """本脚本（或本 exe）所在目录。
+
+    打包成 exe 后 __file__ 指向临时解包目录，用完就被删——报告必须落在 exe 旁边。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def env_line() -> str:
+    """运行环境一行摘要：写进报告，出问题时作者一看就知道你的环境。"""
+    kind = "打包版 exe" if getattr(sys, "frozen", False) else "Python"
+    ver = "%d.%d.%d" % sys.version_info[:3]
+    bits = 64 if sys.maxsize > 2 ** 32 else 32
+    return "%s %s（%d 位）· %s" % (kind, ver, bits, sys.platform)
 
 
 def say(msg):
@@ -58,6 +96,7 @@ SERVICE_RE = re.compile(r"selectService\('([^']*)'\s*,\s*'([^']*)'\s*,\s*'(\d+)'
 NAT_RE = re.compile(r'name="net_access_type"[^>]*value="([^"]*)"')
 
 KEYWORDS = ["校园网", "移动", "电信", "联通"]
+SCRIPT_VERSION = "1.1"
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -201,6 +240,7 @@ def main():
     say("  河海大学校园网 · 服务配置采集（hhu-autologin 项目用）")
     say("=" * 56)
     say("说明：本脚本只读取网络信息与服务列表，不涉及密码。")
+    say("技术信息: " + env_line())
     say("")
 
     choice = ""
@@ -218,7 +258,8 @@ def main():
     add("  河海大学校园网服务配置采集报告")
     add("  校区（运行者选择）: " + campus)
     add("  采集时间: " + time.strftime("%Y-%m-%d %H:%M:%S"))
-    add("  脚本版本: 1.0")
+    add("  脚本版本: " + SCRIPT_VERSION)
+    add("  运行环境: " + env_line())
     add("=" * 52)
     add("")
 
@@ -348,11 +389,10 @@ def main():
 
     report = "\n".join(lines)
     fname = "服务配置报告_%s_%s.txt" % (campus, time.strftime("%Y%m%d_%H%M%S"))
-    import os
-    here = os.path.dirname(os.path.abspath(__file__))
+    base = here()
     saved = ""
-    for d in (here, os.path.join(os.path.expanduser("~"), "Desktop"),
-              os.environ.get("TEMP", here)):
+    for d in (base, os.path.join(os.path.expanduser("~"), "Desktop"),
+              os.environ.get("TEMP", base)):
         if not d:
             continue
         try:
@@ -382,15 +422,14 @@ if __name__ == "__main__":
         main()
     except Exception:
         import traceback
-        import os
         tb = traceback.format_exc()
         errname = "采集脚本异常详情_%s.txt" % time.strftime("%Y%m%d_%H%M%S")
         saved = ""
         try:
-            here = os.path.dirname(os.path.abspath(__file__))
-            with open(os.path.join(here, errname), "w", encoding="utf-8") as f:
+            base = here()
+            with open(os.path.join(base, errname), "w", encoding="utf-8") as f:
                 f.write(tb)
-            saved = os.path.join(here, errname)
+            saved = os.path.join(base, errname)
         except Exception:
             pass
         say("")

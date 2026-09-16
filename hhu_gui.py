@@ -14,9 +14,11 @@
 from __future__ import annotations
 
 import configparser
+import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
 import webbrowser
@@ -47,6 +49,8 @@ if sys.platform == "win32":
     GWLP_WNDPROC = -4
     TPM_RIGHTBUTTON, TPM_RETURNCMD, TPM_NONOTIFY = 0x2, 0x100, 0x80
     MF_STRING = 0x0
+    IMAGE_ICON, LR_LOADFROMFILE, LR_DEFAULTCOLOR = 1, 0x10, 0x0
+    SM_CXSMICON, SM_CYSMICON = 49, 50
 
     class NOTIFYICONDATAW(ctypes.Structure):
         _fields_ = [
@@ -83,30 +87,45 @@ if sys.platform == "win32":
                     ("hCursor", ctypes.c_void_p), ("hbrBackground", wintypes.HBRUSH),
                     ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
 
+    _user32.LoadImageW.restype = wintypes.HANDLE
+    _user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, ctypes.c_uint,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    _user32.GetSystemMetrics.restype = ctypes.c_int
+    _user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    _user32.DestroyIcon.restype = wintypes.BOOL
+    _user32.DestroyIcon.argtypes = [wintypes.HICON]
 
 
-def _make_tray_icon(size: int = 16):
-    """方舟风托盘图标：ak_icon 渲染 -> CreateIcon（alpha>127 视为不透明）。"""
-    raw = ak_icon._ak_icon_rgba(size)
-    and_mask = bytearray()
-    xor_data = bytearray()
-    for y in range(size):
-        row = 0
-        for x in range(size):
-            a = raw[(y * size + x) * 4 + 3]
-            r, g_, b = raw[(y * size + x) * 4], raw[(y * size + x) * 4 + 1], raw[(y * size + x) * 4 + 2]
-            if a > 127:
-                xor_data += bytes((b, g_, r))
-            else:
-                row |= 1 << (15 - x)          # 每行 16 位恰 2 字节，天然对齐
-                xor_data += b"\x00\x00\x00"
-        and_mask += row.to_bytes(2, "little")
-    return _user32.CreateIcon(None, size, size, 1, 24, bytes(and_mask), bytes(xor_data)) or None
+def _make_tray_icon():
+    """托盘图标：多尺寸 PNG 打包成 .ico 后 LoadImage（返回 HICON）。
+
+    不要退回 CreateIcon + 24 位原始位图那条老路：实测那样画出来图标全黑
+    （颜色数据在转换中丢失，且 24 位无 alpha 无法表达抗锯齿）。
+    PNG 图标带真实 alpha，与窗口/任务栏共用同一份绘制数据。
+    """
+    data = ak_icon.ak_icon_ico()
+    path = None
+    for base in (hl.LOG_DIR, pathlib.Path(tempfile.gettempdir())):
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            cand = base / "hhu_tray_icon.ico"
+            if not cand.exists() or cand.read_bytes() != data:
+                cand.write_bytes(data)
+            path = cand
+            break
+        except Exception:
+            continue
+    if path is None:
+        return None
+    cx = _user32.GetSystemMetrics(SM_CXSMICON) or 16
+    cy = _user32.GetSystemMetrics(SM_CYSMICON) or 16
+    return _user32.LoadImageW(None, str(path), IMAGE_ICON, cx, cy,
+                              LR_LOADFROMFILE | LR_DEFAULTCOLOR) or None
 
 
 class TrayIcon:
-    """零依赖系统托盘：独立隐藏窗口 + 专属消息泵线程，事件经队列送回主线程。 \n" +
-"
+    """零依赖系统托盘：独立隐藏窗口 + 专属消息泵线程，事件经队列送回主线程。
+
     不挂钩 Tk 的窗口过程，避免与 Tk 事件循环互相干扰。
     """
 
@@ -194,6 +213,8 @@ class TrayIcon:
         nid.cbSize = ctypes.sizeof(nid)
         nid.hWnd, nid.uID = self.hwnd, 1
         _shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+        if getattr(self, "_hicon", None):
+            _user32.DestroyIcon(self._hicon)
         _user32.PostThreadMessageW(self._thread.ident, 0x0012, 0, 0)  # WM_QUIT
 
 SERVICE_CHOICES = ["校园网", "移动", "电信", "联通"]
@@ -290,26 +311,31 @@ def read_config() -> dict:
         "auto_exit_after_login": cp.getboolean("guard", "auto_exit_after_login", fallback=False),
         "auto_exit_minutes": cp.getint("guard", "auto_exit_minutes", fallback=0),
         "campus_area": cp.get("guard", "campus_area", fallback="jintan"),
+        "notify_on_success": cp.getboolean("notify", "on_success", fallback=True),
+        "notify_on_failure": cp.getboolean("notify", "on_failure", fallback=True),
     }
 
 
 def sync_runtime_config(cfg: dict) -> None:
-    """把配置同步进 hhu_login 的运行时全局 CONFIG。 \n" +
-"
+    """把配置同步进 hhu_login 的运行时全局 CONFIG。
+
     CLI 靠 load_config() 填充（空账号会 sys.exit，GUI 不能用）；
     run_once/ssid_gate/do_login 都依赖它，不填会 KeyError。
     """
     hl.CONFIG.update({
         "username": cfg["username"], "password": cfg["password"], "service": cfg["service"],
         "interval": cfg["interval"], "wifi_ssid": cfg["wifi_ssid"], "debug": True,
-        "notify_enabled": True, "notify_on_success": True, "notify_on_failure": True,
+        "notify_enabled": cfg["notify_on_success"] or cfg["notify_on_failure"],
+        "notify_on_success": cfg["notify_on_success"],
+        "notify_on_failure": cfg["notify_on_failure"],
         "notify_cooldown": 30,
     })
 
 
 def save_all(username: str, password: str, service: str, interval: int, wifi_ssid: str,
              auto_exit_after_login: bool = False, auto_exit_minutes: int = 0,
-             campus_area: str = "jintan") -> None:
+             campus_area: str = "jintan",
+             notify_on_success: bool = True, notify_on_failure: bool = True) -> None:
     hl.save_account(username, password, service)
     cp = configparser.ConfigParser()
     if hl.CONFIG_FILE.exists():
@@ -321,6 +347,11 @@ def save_all(username: str, password: str, service: str, interval: int, wifi_ssi
     cp.set("guard", "auto_exit_after_login", "true" if auto_exit_after_login else "false")
     cp.set("guard", "auto_exit_minutes", str(max(0, int(auto_exit_minutes))))
     cp.set("guard", "campus_area", campus_area)
+    if not cp.has_section("notify"):
+        cp.add_section("notify")
+    cp.set("notify", "enabled", "true" if (notify_on_success or notify_on_failure) else "false")
+    cp.set("notify", "on_success", "true" if notify_on_success else "false")
+    cp.set("notify", "on_failure", "true" if notify_on_failure else "false")
     with hl.CONFIG_FILE.open("w", encoding="utf-8") as f:
         cp.write(f)
 
@@ -343,7 +374,7 @@ class App(tk.Tk):
     def __init__(self, start_hidden: bool = False):
         super().__init__()
         self.title(f"河海校园网自动登录 · 控制台 v{hl.__version__}")
-        self.geometry("580x820")
+        self.geometry("660x860")
         self.resizable(False, False)
         self.th = THEMES["默认"]
         self._last_log_text = ""
@@ -421,15 +452,14 @@ class App(tk.Tk):
             if self._daemon_on:
                 if messagebox.askyesno(
                         "停止后台守护",
-                        "停止后将不再自动检测登录（计划任务一并卸载）， \n" +
+                        "停止后将不再自动检测登录（计划任务一并卸载），\n"
                         "控制台保留，可随时在托盘菜单恢复。确定停止吗？"):
                     self._stop_daemon("托盘手动停止")
             else:
                 self._resume_daemon()
         elif cmd == self.MENU_EXIT:
             state = "后台守护仍在运行" if self._daemon_on else "后台守护已停止"
-            if messagebox.askyesno("退出控制台", f"{state}。 \n" +
-"退出只是关闭这个窗口，确定吗？"):
+            if messagebox.askyesno("退出控制台", f"{state}。\n退出只是关闭这个窗口，确定吗？"):
                 self._real_exit()
 
     def on_close(self):
@@ -545,6 +575,7 @@ class App(tk.Tk):
         self._sync_show()
         self._sync_auto()
         self._sync_exit_online()
+        self._sync_notify()
         self._refresh_status()  # 动态状态色按新主题立即重刷
 
     # ---------- 布局
@@ -564,7 +595,7 @@ class App(tk.Tk):
         ttk.Label(row, text="主题:").pack(side="right")
         self.cmb_theme.bind("<<ComboboxSelected>>",
                             lambda _e: self.apply_theme(self.cmb_theme.get()))
-        self.lbl_flag = ttk.Label(top, text="", wraplength=520, justify="left")
+        self.lbl_flag = ttk.Label(top, text="", wraplength=600, justify="left")
         self.lbl_flag.pack(anchor="w", padx=10, pady=(0, 4))
 
         acct = ttk.LabelFrame(self, text="▍账号配置")
@@ -596,7 +627,7 @@ class App(tk.Tk):
                                           style="TMuted.TLabel", wraplength=300, justify="left")
         self.lbl_service_hint.grid(row=3, column=2, sticky="w")
 
-        self.lbl_real = ttk.Label(acct, text="", wraplength=500, justify="left")
+        self.lbl_real = ttk.Label(acct, text="", wraplength=600, justify="left")
         self.lbl_real.grid(row=4, column=1, columnspan=2, sticky="w", pady=(0, 4))
 
         btns = ttk.Frame(acct)
@@ -635,6 +666,21 @@ class App(tk.Tk):
         self.spn_exit_min.pack(side="left", padx=4)
         ttk.Label(row_exit, text="分钟后自动停止（0=不启用）", style="TMuted.TLabel").pack(side="left")
 
+        self.var_notify_ok = tk.BooleanVar(value=True)
+        self.var_notify_fail = tk.BooleanVar(value=True)
+        self.chk_notify_ok = tk.Label(guard, text="☐ 掉线后自动恢复时通知我（系统弹窗）",
+                                      cursor="hand2")
+        self.chk_notify_ok.pack(anchor="w", padx=10, pady=2)
+        self.chk_notify_ok.bind(
+            "<Button-1>",
+            lambda _e: self._toggle_flag(self.var_notify_ok, self._sync_notify))
+        self.chk_notify_fail = tk.Label(guard, text="☐ 自动登录失败时通知我（系统弹窗）",
+                                        cursor="hand2")
+        self.chk_notify_fail.pack(anchor="w", padx=10, pady=2)
+        self.chk_notify_fail.bind(
+            "<Button-1>",
+            lambda _e: self._toggle_flag(self.var_notify_fail, self._sync_notify))
+
         ttk.Label(guard, text="WiFi 门卫（连接非校园网时是否尝试登录）:").pack(anchor="w", padx=10)
         self.cmb_campus = ttk.Combobox(guard, values=list(CAMPUS_CHOICES), width=28, state="readonly")
         self.cmb_campus.pack(anchor="w", padx=10, pady=2)
@@ -658,7 +704,7 @@ class App(tk.Tk):
 
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=(0, 8))
-        self.btn_clear = ttk.Button(bottom, text="清除断路器", command=self.on_clear_flag)
+        self.btn_clear = ttk.Button(bottom, text="重置断路保护", command=self.on_clear_flag)
         self.btn_clear.pack(side="left")
         self.btn_clear.config(state="disabled")
         self.lbl_link = tk.Label(
@@ -666,6 +712,10 @@ class App(tk.Tk):
             cursor="hand2")
         self.lbl_link.pack(side="right")
         self.lbl_link.bind("<Button-1>", lambda _e: webbrowser.open(REPO_URL))
+        self.lbl_clear_hint = ttk.Label(
+            self, text="（登录时密码错误触发断路保护，不再尝试登录）",
+            style="TMuted.TLabel")
+        self.lbl_clear_hint.pack(anchor="w", padx=12, pady=(0, 8))
 
         self._fill_from_config()
 
@@ -679,6 +729,8 @@ class App(tk.Tk):
         self.spn_interval.delete(0, "end")
         self.spn_interval.insert(0, str(cfg["interval"]))
         self.var_exit_online.set(cfg["auto_exit_after_login"])
+        self.var_notify_ok.set(cfg["notify_on_success"])
+        self.var_notify_fail.set(cfg["notify_on_failure"])
         self.spn_exit_min.delete(0, "end")
         self.spn_exit_min.insert(0, str(cfg["auto_exit_minutes"]))
         for label, (value, _svcs) in CAMPUS_AREA.items():
@@ -714,6 +766,16 @@ class App(tk.Tk):
         self.chk_exit_online.config(
             text=("☑" if on else "☐") + " 登录成功就不再检测（不再自动登录，适合只想开机登录一次的人）",
             fg=self.th["accent"] if on else self.th["fg"], bg=self.th["bg"])
+
+    def _sync_notify(self):
+        ok = self.var_notify_ok.get()
+        fail = self.var_notify_fail.get()
+        self.chk_notify_ok.config(
+            text=("☑" if ok else "☐") + " 掉线后自动恢复时通知我（系统弹窗）",
+            fg=self.th["accent"] if ok else self.th["fg"], bg=self.th["bg"])
+        self.chk_notify_fail.config(
+            text=("☑" if fail else "☐") + " 自动登录失败时通知我（系统弹窗）",
+            fg=self.th["accent"] if fail else self.th["fg"], bg=self.th["bg"])
 
     def _toggle_flag(self, var, sync_fn):
         var.set(not var.get())
@@ -834,8 +896,8 @@ class App(tk.Tk):
                 text = f"状态: ● {state}    WiFi: {ssid or '无'}    后台守护: {guard}"
                 self.lbl_status.config(text=text, foreground=color)
                 if flagged:
-                    self.lbl_flag.config(text="⚠ 断路器已置位：上次认证被服务器拒绝，登录已暂停。"
-                                              "改好密码后点下方「清除断路器」。",
+                    self.lbl_flag.config(text="⚠ 断路保护已触发：登录时密码错误，已停止自动尝试登录。"
+                                              "改好密码后点「保存配置」会自动重置，也可点下方「重置断路保护」。",
                                          foreground=self.th["err"])
                     self.btn_clear.config(state="normal")
                 else:
@@ -916,7 +978,9 @@ class App(tk.Tk):
             save_all(username, password, service, interval, ssid,
                      auto_exit_after_login=self.var_exit_online.get(),
                      auto_exit_minutes=exit_min,
-                     campus_area=CAMPUS_AREA.get(self.cmb_area.get(), ("jintan",))[0])
+                     campus_area=CAMPUS_AREA.get(self.cmb_area.get(), ("jintan",))[0],
+                     notify_on_success=self.var_notify_ok.get(),
+                     notify_on_failure=self.var_notify_fail.get())
             sync_runtime_config(read_config())
             if self.var_autostart.get():
                 return install_task(interval)
@@ -971,7 +1035,7 @@ class App(tk.Tk):
         hl.AUTH_FLAG.unlink(missing_ok=True)
         self.lbl_flag.config(text="")
         self.btn_clear.config(state="disabled")
-        messagebox.showinfo("已清除", "断路器已清除，守护将恢复自动登录")
+        messagebox.showinfo("已重置", "断路保护已重置，守护将恢复自动登录")
 
 
 def main() -> int:

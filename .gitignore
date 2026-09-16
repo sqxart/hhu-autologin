@@ -8,3 +8,7 @@ __pycache__/
 build/
 dist/
 *.spec
+
+# 发布产物（走 GitHub Release 附件，不进仓库）
+release/
+*便携版.zip
