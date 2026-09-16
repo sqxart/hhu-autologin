@@ -25,10 +25,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+def say(msg):
+    """安全输出：pythonw/输出流不可用时静默，绝不让打印本身搞崩脚本。"""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------- 基础 HTTP
 
@@ -188,11 +197,11 @@ def mask_user(uid):
 # ---------------------------------------------------------------- 采集主流程
 
 def main():
-    print("=" * 56)
-    print("  河海大学校园网 · 服务配置采集（hhu-autologin 项目用）")
-    print("=" * 56)
-    print("说明：本脚本只读取网络信息与服务列表，不涉及密码。")
-    print()
+    say("=" * 56)
+    say("  河海大学校园网 · 服务配置采集（hhu-autologin 项目用）")
+    say("=" * 56)
+    say("说明：本脚本只读取网络信息与服务列表，不涉及密码。")
+    say("")
 
     choice = ""
     try:
@@ -200,7 +209,7 @@ def main():
     except Exception:
         pass
     campus = {"1": "江宁", "2": "西康路"}.get(choice, "其他")
-    print()
+    say("")
 
     lines = []
     add = lines.append
@@ -339,18 +348,63 @@ def main():
 
     report = "\n".join(lines)
     fname = "服务配置报告_%s_%s.txt" % (campus, time.strftime("%Y%m%d_%H%M%S"))
-    with open(fname, "w", encoding="utf-8-sig") as f:
-        f.write(report)
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    saved = ""
+    for d in (here, os.path.join(os.path.expanduser("~"), "Desktop"),
+              os.environ.get("TEMP", here)):
+        if not d:
+            continue
+        try:
+            full = os.path.join(d, fname)
+            with open(full, "w", encoding="utf-8-sig") as f:
+                f.write(report)
+            saved = full
+            break
+        except Exception:
+            continue
+    if saved:
+        say("✓ 报告已生成: " + saved)
+        say("  （UTF-8 编码，记事本可直接打开；自查无误后发给项目作者即可）")
+    else:
+        say("✗ 报告写入失败（目录权限不足？）。以下为报告全文，请直接复制发送：")
+        say("-" * 52)
+        say(report)
 
-    print(report)
-    print()
-    print("✓ 报告已生成: " + fname)
-    print("  （UTF-8 编码，记事本可直接打开；自查无误后发给项目作者即可）")
     try:
-        input("按回车键退出...")
+        input("\n按回车键退出...")
     except Exception:
         pass
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        import os
+        tb = traceback.format_exc()
+        errname = "采集脚本异常详情_%s.txt" % time.strftime("%Y%m%d_%H%M%S")
+        saved = ""
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(here, errname), "w", encoding="utf-8") as f:
+                f.write(tb)
+            saved = os.path.join(here, errname)
+        except Exception:
+            pass
+        say("")
+        say("=" * 52)
+        if saved:
+            say("脚本遇到错误已停止。")
+            say("错误详情已保存到本脚本旁边的: " + saved)
+            say("请把这个文件发给项目作者，谢谢！")
+        else:
+            say("脚本遇到错误已停止，且错误详情无法保存。")
+            say("请截图以下全部内容发给项目作者：")
+            say("-" * 52)
+            say(tb)
+        try:
+            input("\n按回车键退出...")
+        except Exception:
+            pass
