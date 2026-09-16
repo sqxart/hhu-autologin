@@ -74,7 +74,7 @@ auto_exit_minutes = 0
 debug = true
 """
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
@@ -167,7 +167,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OP = urllib.request.build_opener(NoRedirect)
+# 本工具的一切请求强制直连（ProxyHandler({}) = 禁用系统代理）。
+# 实测（2026-09）：Clash 系统代理开启时，urllib 默认跟随系统代理，
+# 内网门户请求被送进代理后全部 ConnectionRefused 10061，GUI 误报
+# "不在校园网"、守护整条登录链路瘫痪；掉线探测也可能被代理"代答"
+# 造成假在线。校园网认证守护必须反映本机真实网络状态，绝不走代理。
+OP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
 
 
 def http(url: str, timeout: int = 6, data=None):

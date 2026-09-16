@@ -104,7 +104,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OP = urllib.request.build_opener(NoRedirect)
+# 强制直连（禁用系统代理）：与 hhu_login 同理——校园网探测走系统代理
+# 会被 Clash 等代理弄挂（实测全部 ConnectionRefused），采集必须直连。
+OP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
 
 
 def http(url, timeout=8, data=None):
