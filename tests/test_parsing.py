@@ -119,3 +119,21 @@ def test_save_account_preserves_other_sections(tmp_path, monkeypatch):
     assert cp.get("account", "service") == "移动"
     assert cp.get("guard", "wifi_ssid") == "MyWiFi"      # 用户已改的值不被覆盖
     assert cp.get("guard", "interval_minutes") == "5"
+
+
+# ---------------------------------------------------------------- 代理禁用（回归：v1.4.1）
+
+def test_opener_bypasses_system_proxy():
+    """HTTP 客户端必须禁用系统代理：Clash 等代理开着时走代理会全军覆没
+    （实测 2026-09-16：内网门户请求被代理拒绝，GUI 误报"不在校园网"）。
+
+    机制：build_opener 传入空 ProxyHandler({}) 会顶掉默认的"读系统代理"版，
+    空实例本身不留在 handler 链里——所以断言语义是"链上不允许存在
+    任何带代理配置的 ProxyHandler"，并加源码检查双保险。
+    """
+    import urllib.request
+    bad = [h for h in hl.OP.handlers
+           if isinstance(h, urllib.request.ProxyHandler) and h.proxies]
+    assert not bad, f"OP 混入了带代理配置的 handler: {bad!r}"
+    src = Path(hl.__file__).read_text(encoding="utf-8")
+    assert "urllib.request.ProxyHandler({})" in src, "OP 构造必须保留空 ProxyHandler 直连"
