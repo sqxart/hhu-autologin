@@ -217,18 +217,22 @@ def main():
     ssid = current_wifi_ssid()
     is_online = online()
     s_portal, _, _ = http(EPORTAL_HOST + "/", timeout=6)
-    portal_ok = s_portal == 200
+    portal_ok = s_portal in (200, 301, 302, 303)   # 已登录时主页会重定向到成功页，属正常
     portal_err = ""
     if s_portal is None:
         portal_err = "不可达（可能不在校园网环境）"
     elif s_portal >= 500:
         portal_err = "认证服务器暂时故障（HTTP %s）——这不是你的问题，请过几分钟重跑本脚本" % s_portal
-    elif s_portal != 200:
+    elif not portal_ok:
         portal_err = "异常响应（HTTP %s）" % s_portal
     add("[1] 网络环境")
     add("    WiFi SSID        : " + (ssid or "(获取不到，可能接网线或非 Windows)"))
     add("    在线状态         : " + ("已登录（可上网）" if is_online else "未登录/掉线"))
-    add("    认证门户         : " + ("正常（HTTP 200）" if portal_ok else portal_err))
+    if portal_ok:
+        detail = "正常（已登录，门户重定向属正常）" if s_portal in (301, 302, 303) else "正常（HTTP 200）"
+        add("    认证门户         : " + detail)
+    else:
+        add("    认证门户         : " + portal_err)
     add("")
 
     # [2] 登录页劫持链路（校区指纹）
@@ -316,7 +320,7 @@ def main():
 
     # [7] 自动推断
     add("[7] 自动观察")
-    blob = " ".join(d for _v, d, _i in services) if services else ""
+    blob = " ".join(v + " " + d for v, d, _i in services) if services else ""
     real = ""
     if is_online:
         real = str(get_online_info(fetch_user_index()).get("realServiceName", ""))
