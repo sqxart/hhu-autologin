@@ -455,7 +455,7 @@ class App(tk.Tk):
         self._daemon_interval = max(1, cfg["interval"])
         if cfg["auto_exit_minutes"] > 0:
             self.after(cfg["auto_exit_minutes"] * 60000,
-                       lambda: self._stop_daemon(f"守护已运行 {cfg['auto_exit_minutes']} 分钟"))
+                       lambda: self._stop_daemon(f"检测已运行 {cfg['auto_exit_minutes']} 分钟"))
         self.after(5000, self._daemon_tick)
 
     def _daemon_tick(self):
@@ -622,7 +622,7 @@ class App(tk.Tk):
         self.spn_interval.pack(side="left", padx=4)
         ttk.Label(row2, text="分钟（保存配置后生效）", style="TMuted.TLabel").pack(side="left")
 
-        self.chk_exit_online = tk.Label(guard, text="☐ 上线后自动停止守护（不再自动登录，适合只想开机登录一次的人）",
+        self.chk_exit_online = tk.Label(guard, text="☐ 登录成功就不再检测（不再自动登录，适合只想开机登录一次的人）",
                                         cursor="hand2")
         self.chk_exit_online.pack(anchor="w", padx=10, pady=2)
         self.chk_exit_online.bind(
@@ -630,7 +630,7 @@ class App(tk.Tk):
             lambda _e: self._toggle_flag(self.var_exit_online, self._sync_exit_online))
         row_exit = ttk.Frame(guard)
         row_exit.pack(anchor="w", padx=10, pady=2)
-        ttk.Label(row_exit, text="或：后台守护运行").pack(side="left")
+        ttk.Label(row_exit, text="或：后台检测运行").pack(side="left")
         self.spn_exit_min = ttk.Spinbox(row_exit, from_=0, to=1440, width=5)
         self.spn_exit_min.pack(side="left", padx=4)
         ttk.Label(row_exit, text="分钟后自动停止（0=不启用）", style="TMuted.TLabel").pack(side="left")
@@ -712,7 +712,7 @@ class App(tk.Tk):
     def _sync_exit_online(self):
         on = self.var_exit_online.get()
         self.chk_exit_online.config(
-            text=("☑" if on else "☐") + " 上线后自动停止守护（不再自动登录，适合只想开机登录一次的人）",
+            text=("☑" if on else "☐") + " 登录成功就不再检测（不再自动登录，适合只想开机登录一次的人）",
             fg=self.th["accent"] if on else self.th["fg"], bg=self.th["bg"])
 
     def _toggle_flag(self, var, sync_fn):
