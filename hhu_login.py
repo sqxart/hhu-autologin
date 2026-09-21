@@ -17,6 +17,10 @@
     3 跳过（断路器置位 / SSID 不匹配）
     4 认证被服务器拒绝（账号密码错误 / 触发验证码 / 服务不存在）
     5 配置问题（config.ini 缺失或账号密码未填）
+
+打包说明: 守护 exe 必须用 --windowed 打包（GUI 子系统）。PyInstaller 默认打出来的是
+          控制台子系统，计划任务每次调用 Windows 都会分配一个黑色控制台窗口——
+          守护就变成每 N 分钟闪一下黑框。手动运行时的控制台输出由 hhu_console 按需接回。
 """
 from __future__ import annotations
 
@@ -33,6 +37,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+import hhu_console
 
 # ---------------------------------------------------------------- 基础路径
 
@@ -74,7 +80,7 @@ auto_exit_minutes = 0
 debug = true
 """
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 EPORTAL_HOST = "http://eportal.hhu.edu.cn"
 SEEDS = [
@@ -756,8 +762,31 @@ def run_setup() -> int:
 
 # ---------------------------------------------------------------- 入口
 
+# 需要看得见输出的交互式子命令。守护路径（无参数跑一次 / --quiet）不在其中：
+# 计划任务每 N 分钟拉起一次，哪怕只是申请一个控制台窗口，用户就会看到黑框闪。
+INTERACTIVE_FLAGS = ("--version", "--check", "--setup", "--logout", "--clear-flag", "--loop")
+# 输出是多行报告、需要自己开窗口时留住给用户看清的两个子命令
+HOLD_FLAGS = ("--check", "--setup")
+
+
+def console_wanted(argv) -> bool:
+    if "--quiet" in argv:
+        return False
+    return any(a in INTERACTIVE_FLAGS for a in argv)
+
+
+def console_hold(argv) -> bool:
+    return "--quiet" not in argv and any(a in HOLD_FLAGS for a in argv)
+
+
 def main() -> int:
     global QUIET
+    # 入口第一件事：--windowed 打包后进程没有控制台。这里是唯一决定
+    # 「要不要窗口」的地方——计划任务拉起时绝不申请（见 hhu_console.setup）
+    argv = sys.argv[1:]
+    console_state = hhu_console.setup(
+        want_window=console_wanted(argv), hold_open=console_hold(argv),
+        title=f"hhu-autologin v{__version__}")
     parser = argparse.ArgumentParser(description="河海大学校园网自动登录守护")
     parser.add_argument("--version", action="version", version=f"hhu-autologin v{__version__}")
     parser.add_argument("--loop", nargs="?", const=0, type=int, metavar="分钟",
@@ -774,6 +803,7 @@ def main() -> int:
         return run_setup()
     load_config()
     QUIET = args.quiet
+    dlog(f"console: {console_state}")  # 排障：守护路径应为 none（没开窗口）
 
     if args.clear_flag:
         AUTH_FLAG.unlink(missing_ok=True)
