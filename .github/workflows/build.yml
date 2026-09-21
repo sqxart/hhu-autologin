@@ -21,9 +21,14 @@ jobs:
       - name: Build with PyInstaller
         run: |
           pip install pyinstaller
-          pyinstaller --onefile --clean --name hhu_login hhu_login.py
+          pyinstaller --onefile --clean --windowed --name hhu_login hhu_login.py
           pyinstaller --onefile --clean --windowed --name hhu_gui hhu_gui.py
           pyinstaller --onefile --clean --name hhu_campus_report hhu_campus_report.py
+
+      - name: Verify exe subsystem（黑窗防回归闸门）
+        run: |
+          python tools/check_exe_subsystem.py dist/hhu_login.exe dist/hhu_gui.exe
+          python tools/check_exe_subsystem.py dist/hhu_campus_report.exe --expect cui
 
       - name: Make portable package (exe + 使用前必读！！！.txt)
         env:
