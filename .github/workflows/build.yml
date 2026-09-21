@@ -26,6 +26,8 @@ jobs:
           pyinstaller --onefile --clean --name hhu_campus_report hhu_campus_report.py
 
       - name: Verify exe subsystem（黑窗防回归闸门）
+        env:
+          PYTHONUTF8: "1"      # runner 控制台非 UTF-8（cp1252），不设的话打印中文会崩
         run: |
           python tools/check_exe_subsystem.py dist/hhu_login.exe dist/hhu_gui.exe
           python tools/check_exe_subsystem.py dist/hhu_campus_report.exe --expect cui
