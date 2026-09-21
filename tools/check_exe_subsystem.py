@@ -17,6 +17,15 @@ import struct
 import sys
 from pathlib import Path
 
+# 部分环境的标准输出不是 UTF-8（GitHub runner 实测 cp1252），直接 print 中文和 √ 会
+# UnicodeEncodeError 把构建打挂。把本次运行钉成 UTF-8：配上 CI 里的 PYTHONUTF8=1，
+# 日志里中文也正常可读；拿不准的环境下最差显示成问号，绝不因此失败。
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # PE 可选头里 Subsystem 字段的取值：2=GUI 子系统（无控制台），3=控制台子系统
 SUBSYSTEMS = {2: "gui", 3: "cui"}
 PE_SIGNATURE = b"PE\0\0"
