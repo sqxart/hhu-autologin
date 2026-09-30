@@ -58,8 +58,8 @@ def test_pick_service_by_keyword():
 
 def test_ece_double_encode_matches_page_js():
     # encodeURIComponent 的安全字符集：A-Za-z0-9 -_.!~*'()
-    assert hl.ece("666666") == "666666"          # 纯数字不变
-    assert hl.ece("a!b") == "a!b"            # ! 属安全字符
+    assert hl.ece("666666") == "666666"                  # 纯数字不变
+    assert hl.ece("a!b") == "a!b"                        # ! 属安全字符
     assert hl.ece("校园网") == urllib_quote_twice("校园网")
     assert hl.ece("a b") == "a%2520b"                    # 空格两次编码
     assert hl.ece("a&b=c") == "a%2526b%253Dc"            # & 和 = 被编码
